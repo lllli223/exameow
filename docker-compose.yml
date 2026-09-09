@@ -11,6 +11,7 @@ services:
       - PORT=3000
       - RUST_LOG=info
       - ADMIN_TOKEN=${ADMIN_TOKEN:-pass}
+      - STUDY_SYNC_TOKEN=${STUDY_SYNC_TOKEN:-}
       - EXAM_DB_PATH=/app/data/exameow.db
       - ADMIN_TOKEN_FILE=/app/data/admin_token.txt
     volumes:

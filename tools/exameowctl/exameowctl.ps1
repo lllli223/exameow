@@ -8,8 +8,8 @@
 #
 # Usage (double-dash flags only, so PowerShell does not try to bind them):
 #   .\exameowctl.ps1 status
-#   .\exameowctl.ps1 feed --subject "电工基础" --limit 10 --json
-#   .\exameowctl.ps1 ack abc123 --subject "电工基础"
+#   .\exameowctl.ps1 feed --subject "信息新技术" --limit 10 --json
+#   .\exameowctl.ps1 ack 42 --subject "信息新技术"
 #   .\exameowctl.ps1 bank validate example_bank.json --json
 
 [CmdletBinding()]

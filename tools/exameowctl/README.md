@@ -16,6 +16,10 @@ This folder is self-contained: no frontend, Rust, or Worker code is required or 
 | `example_bank.json` | Example bank exercising every schema rule |
 | `tests/` | `unittest` suite: schema, consumer derivation, client helpers |
 
+## Server-side requirement
+
+The self-hosted server must be started with a non-empty `STUDY_SYNC_TOKEN`. The Docker Compose files in this branch pass that variable into the server and persist `/app/data` so study history survives container recreation. Generate a long random token and provide it through the deployment environment; do not commit it to Git. The Windows `EXAMEOW_TOKEN` value must match the server `STUDY_SYNC_TOKEN`.
+
 ## Setup (Windows)
 
 1. Install Python 3.8+ (`python --version` or `py -3 --version` must work).
