@@ -470,6 +470,16 @@ export interface LocaleMessages {
   manageColCorrect: string
   manageColDuration: string
   manageColTime: string
+  syncTitle: string
+  syncDesc: string
+  syncToken: string
+  syncTestConnection: string
+  syncTestOk: string
+  syncTestFail: string
+  syncPending: string
+  syncFlush: string
+  syncFlushed: string
+  practiceFlagUncertain: string
 }
 
 export const zh: LocaleMessages = {
@@ -941,6 +951,16 @@ export const zh: LocaleMessages = {
   manageColCorrect: '答对',
   manageColDuration: '用时',
   manageColTime: '交卷时间',
+  syncTitle: '学习同步',
+  syncDesc: '将答题记录同步到自建学习 API；本地练习不受影响，离线照常刷题。',
+  syncToken: '访问令牌',
+  syncTestConnection: '测试连接',
+  syncTestOk: '连接成功',
+  syncTestFail: '连接失败',
+  syncPending: '{n} 条待同步',
+  syncFlush: '立即同步',
+  syncFlushed: '已同步 {n} 条',
+  practiceFlagUncertain: '不确定 / 需复习',
 }
 
 export const zhTW: LocaleMessages = {
@@ -1412,6 +1432,16 @@ export const zhTW: LocaleMessages = {
   manageColCorrect: '答对',
   manageColDuration: '用时',
   manageColTime: '交卷时间',
+  syncTitle: '學習同步',
+  syncDesc: '將答題記錄同步到自建學習 API；本地練習不受影響，離線照常刷題。',
+  syncToken: '存取權杖',
+  syncTestConnection: '測試連線',
+  syncTestOk: '連線成功',
+  syncTestFail: '連線失敗',
+  syncPending: '{n} 筆待同步',
+  syncFlush: '立即同步',
+  syncFlushed: '已同步 {n} 筆',
+  practiceFlagUncertain: '不確定 / 需複習',
 }
 
 export const en: LocaleMessages = {
@@ -1883,6 +1913,16 @@ export const en: LocaleMessages = {
   manageColCorrect: 'Correct',
   manageColDuration: 'Time Used',
   manageColTime: 'Submitted At',
+  syncTitle: 'Study Sync',
+  syncDesc: 'Records attempts to your self-hosted study API. Practice stays local-first and works offline.',
+  syncToken: 'Access token',
+  syncTestConnection: 'Test connection',
+  syncTestOk: 'Connected',
+  syncTestFail: 'Connection failed',
+  syncPending: '{n} pending',
+  syncFlush: 'Sync now',
+  syncFlushed: 'Synced {n} attempt(s)',
+  practiceFlagUncertain: 'Unsure / review',
 }
 
 export const ja: LocaleMessages = {
@@ -2354,6 +2394,16 @@ export const ja: LocaleMessages = {
   manageColCorrect: '正解数',
   manageColDuration: '所要時間',
   manageColTime: '提出日時',
+  syncTitle: '学習同期',
+  syncDesc: '解答記録を自前の学習 API に同期します。練習はローカル優先で、オフラインでも使えます。',
+  syncToken: 'アクセストークン',
+  syncTestConnection: '接続テスト',
+  syncTestOk: '接続成功',
+  syncTestFail: '接続失敗',
+  syncPending: '未同期 {n} 件',
+  syncFlush: '今すぐ同期',
+  syncFlushed: '{n} 件を同期しました',
+  practiceFlagUncertain: '自信がない / 要復習',
 }
 
 export const ko: LocaleMessages = {
@@ -2825,6 +2875,16 @@ export const ko: LocaleMessages = {
   manageColCorrect: 'Correct',
   manageColDuration: 'Time Used',
   manageColTime: 'Submitted At',
+  syncTitle: '학습 동기화',
+  syncDesc: '풀이 기록을 자체 학습 API에 동기화합니다. 연습은 로컬 우선으로 오프라인에서도 작동합니다.',
+  syncToken: '액세스 토큰',
+  syncTestConnection: '연결 테스트',
+  syncTestOk: '연결 성공',
+  syncTestFail: '연결 실패',
+  syncPending: '대기 중 {n}건',
+  syncFlush: '지금 동기화',
+  syncFlushed: '{n}건 동기화됨',
+  practiceFlagUncertain: '확실하지 않음 / 복습 필요',
 }
 
 export const es: LocaleMessages = {
@@ -3296,6 +3356,16 @@ export const es: LocaleMessages = {
   manageColCorrect: 'Correct',
   manageColDuration: 'Time Used',
   manageColTime: 'Submitted At',
+  syncTitle: 'Sincronización de estudio',
+  syncDesc: 'Registra cada intento en tu API de estudio autoalojada. La práctica sigue siendo local y funciona sin conexión.',
+  syncToken: 'Token de acceso',
+  syncTestConnection: 'Probar conexión',
+  syncTestOk: 'Conectado',
+  syncTestFail: 'Error de conexión',
+  syncPending: '{n} pendientes',
+  syncFlush: 'Sincronizar ahora',
+  syncFlushed: '{n} intento(s) sincronizado(s)',
+  practiceFlagUncertain: 'Inseguro / repasar',
 }
 
 export const fr: LocaleMessages = {
@@ -3767,6 +3837,16 @@ export const fr: LocaleMessages = {
   manageColCorrect: 'Correct',
   manageColDuration: 'Time Used',
   manageColTime: 'Submitted At',
+  syncTitle: 'Synchronisation d\'étude',
+  syncDesc: 'Enregistre chaque tentative vers votre API d\'étude auto-hébergée. La pratique reste locale et fonctionne hors ligne.',
+  syncToken: 'Jeton d\'accès',
+  syncTestConnection: 'Tester la connexion',
+  syncTestOk: 'Connecté',
+  syncTestFail: 'Échec de connexion',
+  syncPending: '{n} en attente',
+  syncFlush: 'Synchroniser',
+  syncFlushed: '{n} tentative(s) synchronisée(s)',
+  practiceFlagUncertain: 'Incertain / à réviser',
 }
 
 export const de: LocaleMessages = {
@@ -4238,6 +4318,16 @@ export const de: LocaleMessages = {
   manageColCorrect: 'Correct',
   manageColDuration: 'Time Used',
   manageColTime: 'Submitted At',
+  syncTitle: 'Lern-Sync',
+  syncDesc: 'Speichert jeden Versuch in deiner selbst gehosteten Lern-API. Übung bleibt lokal-first und offline nutzbar.',
+  syncToken: 'Zugriffstoken',
+  syncTestConnection: 'Verbindung testen',
+  syncTestOk: 'Verbunden',
+  syncTestFail: 'Verbindung fehlgeschlagen',
+  syncPending: '{n} ausstehend',
+  syncFlush: 'Jetzt synchronisieren',
+  syncFlushed: '{n} Versuch(e) synchronisiert',
+  practiceFlagUncertain: 'Unsicher / wiederholen',
 }
 
 export const ru: LocaleMessages = {
@@ -4709,6 +4799,16 @@ export const ru: LocaleMessages = {
   manageColCorrect: 'Correct',
   manageColDuration: 'Time Used',
   manageColTime: 'Submitted At',
+  syncTitle: 'Синхронизация учёбы',
+  syncDesc: 'Сохраняет каждую попытку в ваш собственный учебный API. Практика работает локально и офлайн.',
+  syncToken: 'Токен доступа',
+  syncTestConnection: 'Проверить соединение',
+  syncTestOk: 'Подключено',
+  syncTestFail: 'Ошибка соединения',
+  syncPending: 'Ожидают: {n}',
+  syncFlush: 'Синхронизировать',
+  syncFlushed: 'Синхронизировано: {n}',
+  practiceFlagUncertain: 'Не уверен / повторить',
 }
 
 export const ar: LocaleMessages = {
@@ -5180,6 +5280,16 @@ export const ar: LocaleMessages = {
   manageColCorrect: 'Correct',
   manageColDuration: 'Time Used',
   manageColTime: 'Submitted At',
+  syncTitle: 'مزامنة الدراسة',
+  syncDesc: 'يسجل كل محاولة في واجهة دراستك ذاتية الاستضافة. تبقى الممارسة محلية وتعمل دون اتصال.',
+  syncToken: 'رمز الوصول',
+  syncTestConnection: 'اختبار الاتصال',
+  syncTestOk: 'متصل',
+  syncTestFail: 'فشل الاتصال',
+  syncPending: '{n} بانتظار المزامنة',
+  syncFlush: 'مزامنة الآن',
+  syncFlushed: 'تمت مزامنة {n}',
+  practiceFlagUncertain: 'غير متأكد / للمراجعة',
 }
 
 export interface LocaleOption {

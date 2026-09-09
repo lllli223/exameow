@@ -33,6 +33,7 @@ import {
   QueueListIcon,
   ArrowPathRoundedSquareIcon,
   ExclamationTriangleIcon,
+  FlagIcon,
 } from '@heroicons/vue/24/outline'
 
 const i18n = useI18nStore()
@@ -394,6 +395,10 @@ function handleImportDone(count: number) {
 
 function handleSelect(answer: string | null) {
   practiceStore.setAnswer(answer)
+}
+
+function handleToggleFlag() {
+  practiceStore.toggleFlagCurrent()
 }
 
 function handleSubmit(answer: string | null) {
@@ -805,6 +810,22 @@ function handleBack() {
             <PracticeModeToggle
               v-model="flashcardMode"
             />
+          </div>
+          <!-- Uncertain / needs-review flag for the current question -->
+          <div class="mt-2">
+            <button
+              class="btn-tonal !h-8 text-xs !px-3"
+              :style="practiceStore.currentFlagged
+                ? {
+                  backgroundColor: 'rgb(var(--md-tertiary-container))',
+                  color: 'rgb(var(--md-on-tertiary-container))',
+                }
+                : { backgroundColor: 'rgb(var(--md-surface-container-high))', color: 'rgb(var(--md-on-surface-variant))' }"
+              @click="handleToggleFlag"
+            >
+              <FlagIcon class="w-3.5 h-3.5 shrink-0" :class="{ 'fill-current': practiceStore.currentFlagged }" />
+              <span>{{ i18n.t('practiceFlagUncertain') }}</span>
+            </button>
           </div>
         </div>
 

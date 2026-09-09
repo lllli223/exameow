@@ -5,8 +5,16 @@ import { useConfigStore } from '@/stores/config'
 
 import { useI18nStore } from '@/stores/i18n'
 import { isCloudflare, isTauri } from '@/utils/platform'
+import {
+  loadStudySyncConfig,
+  saveStudySyncConfig,
+  flushAttempts,
+  testStudyConnection,
+  pendingCount,
+  syncing,
+} from '@/services/studySync'
 import BaseCombobox from '@/components/common/BaseCombobox.vue'
-import { ServerIcon, KeyIcon, CloudArrowDownIcon, CpuChipIcon, CheckCircleIcon, EyeIcon, EyeSlashIcon, CheckIcon, ArrowRightIcon, ArrowLeftIcon, CloudIcon } from '@heroicons/vue/24/outline'
+import { ServerIcon, KeyIcon, CloudArrowDownIcon, CpuChipIcon, CheckCircleIcon, EyeIcon, EyeSlashIcon, CheckIcon, ArrowRightIcon, ArrowLeftIcon, CloudIcon, GlobeAltIcon } from '@heroicons/vue/24/outline'
 
 const configStore = useConfigStore()
 const router = useRouter()
@@ -18,6 +26,52 @@ const saveError = ref('')
 
 const configFetchError = ref('')
 const configFetching = ref(false)
+
+// ── Study Sync (self-hosted study API; independent of the AI API config) ──
+const savedSyncConfig = loadStudySyncConfig()
+const syncBaseUrl = ref(savedSyncConfig.baseUrl)
+const syncToken = ref(savedSyncConfig.token)
+const showSyncToken = ref(false)
+const syncSaveSuccess = ref(false)
+const syncTesting = ref(false)
+const syncTestSuccess = ref('')
+const syncTestError = ref('')
+const syncFlushInfo = ref('')
+const syncFlushError = ref('')
+const syncPendingCount = computed(() => pendingCount.value)
+const syncFlushing = computed(() => syncing.value)
+
+function handleSyncSave() {
+  saveStudySyncConfig({ baseUrl: syncBaseUrl.value, token: syncToken.value })
+  syncSaveSuccess.value = true
+  setTimeout(() => { syncSaveSuccess.value = false }, 2500)
+  // Saving may enable sync — opportunistically drain the outbox (non-blocking)
+  flushAttempts()
+}
+
+async function handleSyncTest() {
+  syncTesting.value = true
+  syncTestSuccess.value = ''
+  syncTestError.value = ''
+  try {
+    const result = await testStudyConnection(syncBaseUrl.value, syncToken.value)
+    if (result.ok) syncTestSuccess.value = result.message
+    else syncTestError.value = result.message
+  } finally {
+    syncTesting.value = false
+  }
+}
+
+async function handleSyncFlush() {
+  syncFlushInfo.value = ''
+  syncFlushError.value = ''
+  const result = await flushAttempts()
+  if (result.remaining > 0) {
+    syncFlushError.value = `${i18n.t('syncTestFail')} (${i18n.t('syncPending', { n: result.remaining })})`
+  } else if (result.sent > 0) {
+    syncFlushInfo.value = i18n.t('syncFlushed', { n: result.sent })
+  }
+}
 
 const showEndpointAndAuth = computed(() => {
   if (isTauri()) return true
@@ -175,6 +229,78 @@ async function handleSave() {
             @update:model-value="configStore.model = $event"
           />
         </div>
+      </div>
+    </div>
+
+    <!-- Study Sync (self-hosted study API) -->
+    <div class="card-filled p-5 sm:p-6 mb-4 shadow-sm border border-[rgb(var(--md-outline-variant)/0.3)]">
+      <label class="text-label-md font-semibold block mb-1" style="color: rgb(var(--md-on-surface-variant))">{{ i18n.t('syncTitle') }}</label>
+      <p class="text-body-sm mb-4" style="color: rgb(var(--md-on-surface-variant))">{{ i18n.t('syncDesc') }}</p>
+
+      <div class="relative mb-3">
+        <GlobeAltIcon class="absolute left-3.5 top-1/2 -translate-y-1/2 w-5 h-5 z-10" style="color: rgb(var(--md-on-surface-variant))" />
+        <input
+          v-model="syncBaseUrl"
+          placeholder="https://your-study-api.example.com"
+          class="input-outlined !pl-11 !rounded-2xl !py-3"
+        >
+      </div>
+
+      <div class="relative">
+        <KeyIcon class="absolute left-3.5 top-1/2 -translate-y-1/2 w-5 h-5 z-10" style="color: rgb(var(--md-on-surface-variant))" />
+        <input
+          v-model="syncToken"
+          :type="showSyncToken ? 'text' : 'password'"
+          :placeholder="i18n.t('syncToken')"
+          class="input-outlined !pl-11 !pr-11 !rounded-2xl !py-3"
+          autocomplete="off"
+        >
+        <button class="absolute right-3 top-1/2 -translate-y-1/2 btn-icon !w-8 !h-8" @click="showSyncToken = !showSyncToken">
+          <EyeSlashIcon v-if="showSyncToken" class="w-4 h-4" />
+          <EyeIcon v-else class="w-4 h-4" />
+        </button>
+      </div>
+
+      <div class="flex flex-wrap items-center gap-2 mt-4">
+        <button class="btn-tonal text-sm !h-10 !px-4" @click="handleSyncSave">
+          <CheckIcon class="w-4 h-4" />
+          <span>{{ i18n.t('configSave') }}</span>
+        </button>
+        <button
+          class="btn-tonal text-sm !h-10 !px-4"
+          :disabled="!syncBaseUrl.trim() || syncTesting"
+          @click="handleSyncTest"
+        >
+          <span>{{ syncTesting ? '...' : i18n.t('syncTestConnection') }}</span>
+        </button>
+        <button
+          class="btn-tonal text-sm !h-10 !px-4"
+          :disabled="syncPendingCount === 0 || syncFlushing"
+          @click="handleSyncFlush"
+        >
+          <span>{{ syncFlushing ? '...' : i18n.t('syncFlush') }}</span>
+        </button>
+        <span class="text-body-sm" style="color: rgb(var(--md-on-surface-variant))">
+          {{ i18n.t('syncPending', { n: syncPendingCount }) }}
+        </span>
+        <Transition name="fade">
+          <span v-if="syncSaveSuccess" class="flex items-center gap-1 text-sm font-medium" style="color: rgb(var(--md-primary))">
+            <CheckCircleIcon class="w-4 h-4" /> {{ i18n.t('configSaved') }}
+          </span>
+        </Transition>
+      </div>
+
+      <div v-if="syncTestSuccess" class="mt-3 text-sm font-medium flex items-center gap-1" style="color: rgb(var(--md-primary))">
+        <CheckCircleIcon class="w-4 h-4" /> {{ i18n.t('syncTestOk') }} ({{ syncTestSuccess }})
+      </div>
+      <div v-if="syncTestError" class="mt-3 text-sm" style="color: rgb(var(--md-error))">
+        {{ i18n.t('syncTestFail') }} ({{ syncTestError }})
+      </div>
+      <div v-if="syncFlushInfo" class="mt-3 text-sm font-medium flex items-center gap-1" style="color: rgb(var(--md-primary))">
+        <CheckCircleIcon class="w-4 h-4" /> {{ syncFlushInfo }}
+      </div>
+      <div v-if="syncFlushError" class="mt-3 text-sm" style="color: rgb(var(--md-error))">
+        {{ syncFlushError }}
       </div>
     </div>
 

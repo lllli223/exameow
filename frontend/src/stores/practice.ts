@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import type { QuestionBank, PracticeSession, PracticeMode, MockExamConfig, Question, PracticeFilter } from '@exameow/shared'
+import type { QuestionBank, PracticeSession, PracticeSessionItem, PracticeMode, MockExamConfig, Question, PracticeFilter } from '@exameow/shared'
+import { recordStudyAttempt } from '@/services/studySync'
 import { analyzeCSV, analyzeExcel, parseWithMapping } from '@/utils/importParser'
 import type { ColumnMapping, ImportAnalysis } from '@/utils/importParser'
 import { usePracticeHistoryStore } from '@/stores/practiceHistory'
@@ -205,11 +206,12 @@ export const usePracticeStore = defineStore('practice', () => {
 
     if (questions.length === 0) return false
 
-    const sessionQuestions = questions.map((q, i) => ({
+    const sessionQuestions: PracticeSessionItem[] = questions.map((q, i) => ({
       question: { ...q, id: `${q.id}-s${i}` },
       userAnswer: null as string | null,
       isCorrect: null as boolean | null,
       submitted: false,
+      attemptId: generateId(),
     }))
 
     session.value = {
@@ -221,6 +223,7 @@ export const usePracticeStore = defineStore('practice', () => {
       finishedAt: null,
       mockConfig: mode === 'mock' ? normalizedMockConfig : undefined,
       filter: mode === 'wrong' ? undefined : filter,
+      sessionKey: generateId(),
     }
     saveSession(session.value)
     return true
@@ -250,11 +253,13 @@ export const usePracticeStore = defineStore('practice', () => {
   }
 
   function submitAnswer(answer: string | null): boolean | null {
-    if (!session.value) return null
-    const item = session.value.questions[session.value.currentIndex]
+    const s = session.value
+    if (!s) return null
+    const item = s.questions[s.currentIndex]
     if (!item) return null
     item.userAnswer = answer
     item.submitted = true
+    if (!item.submittedAt) item.submittedAt = Date.now()
 
     const q = item.question
     if (q.type === 'single_choice' || q.type === 'multi_choice') {
@@ -272,18 +277,58 @@ export const usePracticeStore = defineStore('practice', () => {
     }
 
     usePracticeHistoryStore().record(q.type, item.isCorrect)
-    saveSession(session.value)
+    ensureSyncMeta()
+    recordStudyAttempt(s, item)
+    saveSession(s)
     return item.isCorrect
   }
 
   function selfCheck(isCorrect: boolean) {
-    if (!session.value) return
-    const item = session.value.questions[session.value.currentIndex]
+    const s = session.value
+    if (!s) return
+    const item = s.questions[s.currentIndex]
     if (!item) return
     item.isCorrect = isCorrect
     item.submitted = true
+    if (!item.submittedAt) item.submittedAt = Date.now()
     usePracticeHistoryStore().record(item.question.type, isCorrect)
-    saveSession(session.value)
+    ensureSyncMeta()
+    recordStudyAttempt(s, item)
+    saveSession(s)
+  }
+
+  /** Lazily backfill stable sync identifiers on sessions created before study sync existed */
+  function ensureSyncMeta() {
+    const s = session.value
+    if (!s) return
+    if (!s.sessionKey) s.sessionKey = generateId()
+    for (const item of s.questions) {
+      if (!item.attemptId) item.attemptId = generateId()
+    }
+  }
+
+  const currentFlagged = computed(() => {
+    if (!session.value) return false
+    const item = session.value.questions[session.value.currentIndex]
+    return item?.flagged === true
+  })
+
+  /**
+   * Toggle the "不确定/需复习" flag on the current question. May be used before
+   * or after submit; when already submitted the same attempt (same
+   * idempotencyKey) is re-enqueued so the server updates the existing row.
+   */
+  function toggleFlagCurrent() {
+    const s = session.value
+    if (!s) return
+    const item = s.questions[s.currentIndex]
+    if (!item) return
+    ensureSyncMeta()
+    item.flagged = !item.flagged
+    saveSession(s)
+    if (item.submitted) {
+      recordStudyAttempt(s, item)
+    }
   }
 
   function saveAiAnalysis(questionId: string, text: string) {
@@ -454,6 +499,7 @@ export const usePracticeStore = defineStore('practice', () => {
     answeredCount,
     hasUnanswered,
     currentSubmitted,
+    currentFlagged,
     score,
     autoGradedCount,
     addBank,
@@ -464,6 +510,7 @@ export const usePracticeStore = defineStore('practice', () => {
     setAnswer,
     submitAnswer,
     selfCheck,
+    toggleFlagCurrent,
     saveAiAnalysis,
     nextQuestion,
     prevQuestion,

@@ -24,6 +24,12 @@ export interface Question {
   subject?: string
   chapter?: string
   difficulty?: Difficulty
+  /** Stable identity across practice sessions (used as sync questionKey) */
+  stableKey?: string
+  knowledgePoint?: string
+  tags?: string[]
+  /** Free-form origin info (source file, batch, page, ...) */
+  sourceMeta?: Record<string, unknown>
 }
 
 export interface PracticeFilter {
@@ -57,15 +63,30 @@ export interface MockExamConfig {
   typeCounts: Record<string, number>
 }
 
+export interface PracticeSessionItem {
+  question: Question
+  userAnswer: string | null
+  isCorrect: boolean | null
+  submitted: boolean
+  /** Stable per-question attempt id, generated at session start (study sync) */
+  attemptId?: string
+  /** "不确定/需复习" flag, may toggle before or after submit */
+  flagged?: boolean
+  /** Wall-clock time the attempt was first submitted */
+  submittedAt?: number
+}
+
 export interface PracticeSession {
   bankId: string
   mode: PracticeMode
-  questions: { question: Question; userAnswer: string | null; isCorrect: boolean | null; submitted: boolean }[]
+  questions: PracticeSessionItem[]
   currentIndex: number
   startedAt: number
   finishedAt: number | null
   mockConfig?: MockExamConfig
   filter?: PracticeFilter
+  /** Stable per-session id for study sync; old sessions are backfilled lazily */
+  sessionKey?: string
 }
 
 export interface ExamParams {
