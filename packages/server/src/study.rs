@@ -1027,76 +1027,446 @@ pub async fn question_history_handler(
 // Banks
 // ---------------------------------------------------------------------------
 
+/// Study-bank schema version accepted by `validate_bank`
+/// (mirrors `SCHEMA_VERSION` in tools/exameowctl/schema.py).
+const BANK_SCHEMA_VERSION: i64 = 1;
+/// schema.py `MAX_KEY_LENGTH`: bank keys and question stableKeys are
+/// identifiers of at most 128 characters (deliberately stricter than the
+/// `MAX_KEY_LEN` used for attempt/session keys).
+const MAX_SCHEMA_KEY_LEN: usize = 128;
+/// schema.py `QUESTION_TYPES`: `short_answer` is deliberately not allowed.
+const BANK_QUESTION_TYPES: &[&str] = &["single_choice", "multi_choice", "true_false", "fill_blank"];
+const BANK_CHOICE_TYPES: &[&str] = &["single_choice", "multi_choice"];
+const BANK_DIFFICULTIES: &[&str] = &["easy", "medium", "hard"];
+const BANK_FIELDS: &[&str] = &[
+    "schemaVersion",
+    "key",
+    "name",
+    "questions",
+    "subject",
+    "chapter",
+    "tags",
+    "sourceMeta",
+];
+const BANK_QUESTION_FIELDS: &[&str] = &[
+    "id",
+    "stableKey",
+    "type",
+    "stem",
+    "options",
+    "answer",
+    "analysis",
+    "subject",
+    "chapter",
+    "knowledgePoint",
+    "difficulty",
+    "tags",
+    "sourceMeta",
+];
+
+/// Free-text field check (schema.py `_check_text`): a non-empty, non
+/// whitespace-only string.
+fn check_text(value: &serde_json::Value, path: &str) -> Result<(), String> {
+    match value.as_str() {
+        None => Err(format!("{path} must be a string")),
+        Some(s) if s.trim().is_empty() => {
+            Err(format!("{path} must not be empty or whitespace-only"))
+        }
+        Some(_) => Ok(()),
+    }
+}
+
+/// Identifier check for machine-facing keys, i.e. bank keys and stableKeys
+/// (schema.py `_check_identifier`): non-empty, no whitespace, no `/` or `\`,
+/// no control characters, at most `MAX_SCHEMA_KEY_LEN` characters.
+fn check_identifier(value: &serde_json::Value, path: &str) -> Result<(), String> {
+    let text = value
+        .as_str()
+        .ok_or_else(|| format!("{path} must be a string"))?;
+    if text.is_empty() {
+        return Err(format!("{path} must not be empty"));
+    }
+    let char_count = text.chars().count();
+    if char_count > MAX_SCHEMA_KEY_LEN {
+        return Err(format!(
+            "{path} must be at most {MAX_SCHEMA_KEY_LEN} characters (got {char_count})"
+        ));
+    }
+    if text.chars().any(char::is_whitespace) {
+        return Err(format!("{path} must not contain whitespace"));
+    }
+    if text.contains('/') || text.contains('\\') {
+        return Err(format!("{path} must not contain '/' or '\\'"));
+    }
+    if text.chars().any(|c| (c as u32) < 32 || (c as u32) == 127) {
+        return Err(format!("{path} must not contain control characters"));
+    }
+    Ok(())
+}
+
+/// schema.py `_check_tags`: a list of non-empty strings.
+fn check_tags(value: &serde_json::Value, path: &str) -> Result<(), String> {
+    let tags = value
+        .as_array()
+        .ok_or_else(|| format!("{path} must be a list of strings"))?;
+    for (tag_index, tag) in tags.iter().enumerate() {
+        check_text(tag, &format!("{path}[{tag_index}]"))?;
+    }
+    Ok(())
+}
+
+/// schema.py `_check_unknown_fields`: reject fields outside `allowed` so
+/// typos fail loudly instead of being silently dropped.
+fn check_unknown_fields(
+    obj: &serde_json::Map<String, serde_json::Value>,
+    allowed: &[&str],
+    path: &str,
+) -> Result<(), String> {
+    let mut extra: Vec<&str> = obj
+        .keys()
+        .filter(|field| !allowed.contains(&field.as_str()))
+        .map(|field| field.as_str())
+        .collect();
+    if extra.is_empty() {
+        return Ok(());
+    }
+    extra.sort_unstable();
+    Err(format!(
+        "{path}: unknown field(s): {} (allowed: {})",
+        extra.join(", "),
+        allowed.join(", ")
+    ))
+}
+
+/// schema.py `_check_choice_answer`: a non-empty string of distinct uppercase
+/// option letters; `single_choice` has exactly one letter; every letter must
+/// exist among the options (cross-checked only when the option count is
+/// valid, matching schema.py).
+fn check_choice_answer(
+    value: &serde_json::Value,
+    path: &str,
+    option_count: usize,
+    multi: bool,
+) -> Result<(), String> {
+    let answer = value
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            format!(
+                "{path}: answer must be a non-empty string of option letters (e.g. \"A\" or \"ABD\")"
+            )
+        })?;
+    let letters: Vec<char> = answer.chars().collect();
+    if letters.iter().any(|c| !c.is_ascii_uppercase()) {
+        return Err(format!(
+            "{path}: answer letters must be uppercase A-Z option letters (e.g. \"A\" or \"ABD\"); \
+             lowercase or other characters are not accepted"
+        ));
+    }
+    let mut seen = HashSet::new();
+    if letters.iter().any(|c| !seen.insert(*c)) {
+        return Err(format!("{path}: answer must not repeat option letters"));
+    }
+    if !multi && letters.len() != 1 {
+        return Err(format!(
+            "{path}: single_choice answer must be exactly one option letter (got \"{answer}\")"
+        ));
+    }
+    if (2..=5).contains(&option_count) {
+        let allowed: String = (0..option_count)
+            .map(|i| char::from(b'A' + i as u8))
+            .collect();
+        let mut invalid: Vec<char> = letters
+            .iter()
+            .copied()
+            .filter(|c| !allowed.contains(*c))
+            .collect();
+        invalid.sort_unstable();
+        invalid.dedup();
+        if !invalid.is_empty() {
+            return Err(format!(
+                "{path}: answer references option letter(s) '{}' that do not exist \
+                 (options are {allowed})",
+                invalid.into_iter().collect::<String>()
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Validate one bank question (schema.py `_validate_question`) with
+/// first-error semantics; `index` is used in error paths.
+fn validate_question(question: &serde_json::Value, index: usize) -> Result<(), String> {
+    let path = format!("questions[{index}]");
+    let obj = question
+        .as_object()
+        .ok_or_else(|| format!("{path}: question must be a JSON object"))?;
+    check_unknown_fields(obj, BANK_QUESTION_FIELDS, &path)?;
+
+    let question_type = match obj.get("type") {
+        None => return Err(format!("{path}: missing required field: type")),
+        Some(value) => {
+            let question_type = value.as_str().ok_or_else(|| {
+                format!(
+                    "{path}.type: unknown question type (allowed: {})",
+                    BANK_QUESTION_TYPES.join(", ")
+                )
+            })?;
+            if !BANK_QUESTION_TYPES.contains(&question_type) {
+                if question_type == "short_answer" {
+                    return Err(format!(
+                        "{path}.type: question type 'short_answer' is not allowed in study \
+                         banks (allowed: {})",
+                        BANK_QUESTION_TYPES.join(", ")
+                    ));
+                }
+                return Err(format!(
+                    "{path}.type: unknown question type '{question_type}' (allowed: {})",
+                    BANK_QUESTION_TYPES.join(", ")
+                ));
+            }
+            question_type
+        }
+    };
+
+    for field in ["stem", "analysis"] {
+        match obj.get(field) {
+            None => return Err(format!("{path}: missing required field: {field}")),
+            Some(value) => check_text(value, &format!("{path}.{field}"))?,
+        }
+    }
+
+    let has_id = obj.contains_key("id");
+    let has_stable_key = obj.contains_key("stableKey");
+    if !has_id && !has_stable_key {
+        return Err(format!(
+            "{path}: missing required field: 'id' or 'stableKey' (at least one)"
+        ));
+    }
+    if let Some(value) = obj.get("id") {
+        check_text(value, &format!("{path}.id"))?;
+    }
+    if let Some(value) = obj.get("stableKey") {
+        check_identifier(value, &format!("{path}.stableKey"))?;
+    }
+
+    let is_choice = matches!(question_type, "single_choice" | "multi_choice");
+    let option_count: Option<usize> = if is_choice {
+        let options = obj.get("options").ok_or_else(|| {
+            format!(
+                "{path}: missing required field: options ({question_type} questions must \
+                 have 2-5 options)"
+            )
+        })?;
+        let options = options
+            .as_array()
+            .ok_or_else(|| format!("{path}.options: options must be a list of strings"))?;
+        let count = options.len();
+        if !(2..=5).contains(&count) {
+            return Err(format!(
+                "{path}.options: choice questions must have 2-5 options (got {count})"
+            ));
+        }
+        for (option_index, option) in options.iter().enumerate() {
+            check_text(option, &format!("{path}.options[{option_index}]"))?;
+        }
+        Some(count)
+    } else if obj.contains_key("options") {
+        return Err(format!(
+            "{path}.options: options are only allowed for {} questions",
+            BANK_CHOICE_TYPES.join("/")
+        ));
+    } else {
+        None
+    };
+
+    let answer = obj
+        .get("answer")
+        .ok_or_else(|| format!("{path}: missing required field: answer"))?;
+    if is_choice {
+        check_choice_answer(
+            answer,
+            &format!("{path}.answer"),
+            option_count.unwrap_or(0),
+            question_type == "multi_choice",
+        )?;
+    } else if question_type == "true_false" {
+        if !matches!(answer.as_str(), Some("true") | Some("false")) {
+            return Err(format!(
+                "{path}.answer: true_false answer must be exactly \"true\" or \"false\""
+            ));
+        }
+    } else {
+        // fill_blank
+        check_text(answer, &format!("{path}.answer"))?;
+    }
+
+    for field in ["subject", "chapter", "knowledgePoint"] {
+        if let Some(value) = obj.get(field) {
+            check_text(value, &format!("{path}.{field}"))?;
+        }
+    }
+    if let Some(value) = obj.get("difficulty") {
+        let valid = value
+            .as_str()
+            .is_some_and(|difficulty| BANK_DIFFICULTIES.contains(&difficulty));
+        if !valid {
+            return Err(format!(
+                "{path}.difficulty: difficulty must be one of: {}",
+                BANK_DIFFICULTIES.join(", ")
+            ));
+        }
+    }
+    if let Some(value) = obj.get("tags") {
+        check_tags(value, &format!("{path}.tags"))?;
+    }
+    if let Some(value) = obj.get("sourceMeta") {
+        if !value.is_object() {
+            return Err(format!("{path}.sourceMeta: sourceMeta must be an object"));
+        }
+    }
+    Ok(())
+}
+
+/// Validate a schemaVersion 1 bank object and return
+/// `(key, name, payload, question_count)`. Mirrors `validate_bank` in
+/// tools/exameowctl/schema.py with first-error semantics, plus the server's
+/// own size/count safeguards.
+fn validate_bank_v1(
+    bank: &serde_json::Value,
+) -> Result<(String, String, serde_json::Value, usize), String> {
+    let obj = bank
+        .as_object()
+        .ok_or_else(|| "bank must be a JSON object".to_string())?;
+    check_unknown_fields(obj, BANK_FIELDS, "(bank)")?;
+
+    let version = match obj.get("schemaVersion") {
+        None => {
+            return Err(format!(
+                "missing required field: schemaVersion (must be {BANK_SCHEMA_VERSION})"
+            ))
+        }
+        Some(serde_json::Value::Number(number)) if number.is_i64() => {
+            number.as_i64().unwrap_or(0)
+        }
+        Some(_) => {
+            return Err(format!(
+                "schemaVersion must be the integer {BANK_SCHEMA_VERSION}"
+            ))
+        }
+    };
+    if version != BANK_SCHEMA_VERSION {
+        return Err(format!(
+            "unsupported schemaVersion {version} (this server supports version \
+             {BANK_SCHEMA_VERSION} only)"
+        ));
+    }
+
+    let key_value = obj
+        .get("key")
+        .ok_or_else(|| "missing required field: key".to_string())?;
+    check_identifier(key_value, "key")?;
+    let bank_key = key_value.as_str().unwrap_or_default().to_string();
+
+    let name_value = obj
+        .get("name")
+        .ok_or_else(|| "missing required field: name".to_string())?;
+    check_text(name_value, "name")?;
+    let name = name_value.as_str().unwrap_or_default().trim().to_string();
+    if name.len() > MAX_BANK_NAME_LEN {
+        return Err(format!("bank name exceeds {MAX_BANK_NAME_LEN} characters"));
+    }
+
+    let questions = obj
+        .get("questions")
+        .ok_or_else(|| "missing required field: questions".to_string())?
+        .as_array()
+        .ok_or_else(|| "questions must be a list".to_string())?;
+    if questions.len() > MAX_BANK_QUESTIONS {
+        return Err(format!("questions exceed {MAX_BANK_QUESTIONS} items"));
+    }
+
+    // schema.py `_check_duplicate_stable_keys`: stable keys must be unique
+    // within one bank so re-imports stay idempotent.
+    let mut stable_keys: HashSet<&str> = HashSet::new();
+    for (index, question) in questions.iter().enumerate() {
+        validate_question(question, index)?;
+        if let Some(stable_key) = question
+            .as_object()
+            .and_then(|q| q.get("stableKey"))
+            .and_then(|value| value.as_str())
+        {
+            if !stable_key.is_empty() && !stable_keys.insert(stable_key) {
+                return Err(format!(
+                    "questions: duplicate stableKey '{stable_key}' (stable keys must \
+                     be unique within one bank)"
+                ));
+            }
+        }
+    }
+
+    for field in ["subject", "chapter"] {
+        if let Some(value) = obj.get(field) {
+            check_text(value, field)?;
+        }
+    }
+    if let Some(value) = obj.get("tags") {
+        check_tags(value, "tags")?;
+    }
+    if let Some(value) = obj.get("sourceMeta") {
+        if !value.is_object() {
+            return Err("sourceMeta must be an object".to_string());
+        }
+    }
+
+    let serialized = serde_json::to_string(bank)
+        .map_err(|e| format!("bank payload is not serializable: {e}"))?;
+    if serialized.len() > MAX_BANK_PAYLOAD_BYTES {
+        return Err(format!("bank payload exceeds {MAX_BANK_PAYLOAD_BYTES} bytes"));
+    }
+
+    Ok((bank_key, name, bank.clone(), questions.len()))
+}
+
 /// Validate an import payload and return (bankKey, name, payload, questionCount).
-/// The payload is either the `bank` object (when present) or the whole body.
+///
+/// schemaVersion 1 contract (tools/exameowctl/schema.py): the CLI posts the
+/// bank object itself, i.e. the body *is* the bank (`{schemaVersion, key,
+/// name, questions, ...}`). A legacy wrapper `{"bankKey": ..., "bank": {...}}`
+/// is still accepted, but only when the nested bank is itself a compliant
+/// schemaVersion 1 bank with its own `key`, and a wrapper `bankKey` (when
+/// present) must match that nested `key`.
 fn validate_bank(
     body: &serde_json::Value,
 ) -> Result<(String, String, serde_json::Value, usize), String> {
     let obj = body
         .as_object()
-        .ok_or_else(|| "body must be a JSON object".to_string())?;
-    let bank_key = obj
-        .get("bankKey")
-        .and_then(|v| v.as_str())
-        .map(str::trim)
-        .unwrap_or("");
-    if bank_key.is_empty() {
-        return Err("bankKey is required".to_string());
-    }
-    if bank_key.len() > MAX_KEY_LEN {
-        return Err(format!("bankKey exceeds {MAX_KEY_LEN} characters"));
-    }
-    let payload = match obj.get("bank") {
-        None => body.clone(),
-        Some(v) if v.is_object() => v.clone(),
+        .ok_or_else(|| "bank must be a JSON object".to_string())?;
+    let (bank, wrapper_bank_key) = match obj.get("bank") {
+        Some(nested) if nested.is_object() => {
+            // The wrapper is only a transport envelope: `bank` plus an
+            // optional `bankKey`. Anything else is a typo or a stale client.
+            check_unknown_fields(obj, &["bank", "bankKey"], "(wrapper)")?;
+            (nested, obj.get("bankKey"))
+        }
         Some(_) => return Err("bank must be a JSON object".to_string()),
+        None => (body, None),
     };
-    let name = payload
-        .get("name")
-        .and_then(|v| v.as_str())
-        .map(str::trim)
-        .unwrap_or("");
-    if name.is_empty() {
-        return Err("bank name is required".to_string());
-    }
-    if name.len() > MAX_BANK_NAME_LEN {
-        return Err(format!("bank name exceeds {MAX_BANK_NAME_LEN} characters"));
-    }
-    let questions = payload
-        .get("questions")
-        .and_then(|v| v.as_array())
-        .ok_or_else(|| "bank questions must be a JSON array".to_string())?;
-    if questions.len() > MAX_BANK_QUESTIONS {
-        return Err(format!("questions exceed {MAX_BANK_QUESTIONS} items"));
-    }
-    for (i, q) in questions.iter().enumerate() {
-        if !q.is_object() {
-            return Err(format!("questions[{i}] must be a JSON object"));
-        }
-        let options = q.get("options").and_then(|v| v.as_array());
-        if options.is_some_and(|o| o.len() > 5) {
-            let qtype = q.get("type").and_then(|v| v.as_str()).unwrap_or("");
-            if !matches!(qtype, "true_false" | "fill_blank" | "short_answer") {
-                return Err(format!(
-                    "questions[{i}] is a choice question with more than 5 options"
-                ));
-            }
+
+    let (bank_key, name, payload, question_count) = validate_bank_v1(bank)?;
+
+    if let Some(wrapper_key) = wrapper_bank_key {
+        let wrapper_key = wrapper_key
+            .as_str()
+            .ok_or_else(|| "bankKey must be a string".to_string())?;
+        if wrapper_key != bank_key.as_str() {
+            return Err(format!(
+                "bankKey '{wrapper_key}' does not match nested bank key '{bank_key}'"
+            ));
         }
     }
-    let serialized = serde_json::to_string(&payload)
-        .map_err(|e| format!("bank payload is not serializable: {e}"))?;
-    if serialized.len() > MAX_BANK_PAYLOAD_BYTES {
-        return Err(format!(
-            "bank payload exceeds {MAX_BANK_PAYLOAD_BYTES} bytes"
-        ));
-    }
-    let question_count = questions.len();
-    Ok((
-        bank_key.to_string(),
-        name.to_string(),
-        payload,
-        question_count,
-    ))
+
+    Ok((bank_key, name, payload, question_count))
 }
 
 struct StoredBank {
@@ -1594,52 +1964,377 @@ mod tests {
         assert_eq!((started, finished), (None, Some(999)));
     }
 
-    #[test]
-    fn bank_validation_and_roundtrip() {
-        let flat = json!({
-            "bankKey": "b1",
+    fn valid_bank() -> serde_json::Value {
+        json!({
+            "schemaVersion": 1,
+            "key": "sgcc-safety",
             "name": "Bank One",
+            "subject": "电气安全",
+            "chapter": "第一章",
+            "tags": ["sgcc", "safety"],
+            "sourceMeta": { "origin": "test" },
             "questions": [
-                { "id": "q1", "type": "single_choice", "stem": "s", "options": ["A", "B", "C", "D", "E"], "answer": "A" },
-                { "id": "q2", "type": "short_answer", "stem": "s", "answer": "x" }
+                { "id": "q1", "type": "single_choice", "stem": "Pick one", "options": ["a", "b", "c", "d"], "answer": "A", "analysis": "A is first" },
+                { "stableKey": "sk-multi", "type": "multi_choice", "stem": "Pick two", "options": ["a", "b", "c"], "answer": "AB", "analysis": "A and B", "difficulty": "hard" },
+                { "stableKey": "sk-true-false", "type": "true_false", "stem": "Sky is blue", "answer": "true", "analysis": "Usually" },
+                { "stableKey": "sk-fill-blank", "type": "fill_blank", "stem": "One plus one is", "answer": "2", "analysis": "Arithmetic" }
             ]
+        })
+    }
+
+    fn bank_with_questions(questions: serde_json::Value) -> serde_json::Value {
+        let mut bank = valid_bank();
+        bank["questions"] = questions;
+        bank
+    }
+
+    fn question_of(question_type: &str) -> serde_json::Value {
+        let mut question = json!({
+            "stableKey": format!("sk-{question_type}"),
+            "type": question_type,
+            "stem": "stem",
+            "analysis": "analysis",
         });
-        let (key, name, payload, count) = validate_bank(&flat).unwrap();
-        assert_eq!(key, "b1");
+        match question_type {
+            "single_choice" => {
+                question["options"] = json!(["a", "b", "c", "d"]);
+                question["answer"] = json!("A");
+            }
+            "multi_choice" => {
+                question["options"] = json!(["a", "b", "c", "d"]);
+                question["answer"] = json!("AB");
+            }
+            "true_false" => question["answer"] = json!("true"),
+            "fill_blank" => question["answer"] = json!("filled"),
+            _ => {}
+        }
+        question
+    }
+
+    fn question_err(question: serde_json::Value) -> String {
+        validate_bank(&bank_with_questions(json!([question]))).unwrap_err()
+    }
+
+    #[test]
+    fn bank_accepts_direct_cli_payload() {
+        // tools/exameowctl `bank import` posts the validated bank JSON itself
+        // as the request body: no bankKey envelope, key comes from `key`.
+        let (key, name, payload, count) = validate_bank(&valid_bank()).unwrap();
+        assert_eq!(key, "sgcc-safety");
         assert_eq!(name, "Bank One");
-        assert_eq!(count, 2);
+        assert_eq!(count, 4);
+        assert_eq!(payload["schemaVersion"], json!(1));
+        assert_eq!(payload["key"], json!("sgcc-safety"));
 
-        let nested = json!({ "bankKey": "b2", "bank": { "name": "Nested", "questions": [] } });
-        assert!(validate_bank(&nested).is_ok());
+        // empty question list is legal
+        let (_, _, _, count) = validate_bank(&bank_with_questions(json!([]))).unwrap();
+        assert_eq!(count, 0);
+    }
 
-        assert!(validate_bank(&json!({ "name": "N", "questions": [] })).is_err());
-        assert!(validate_bank(&json!({ "bankKey": "b", "questions": [] })).is_err());
-        assert!(validate_bank(&json!({ "bankKey": "b", "name": "N" })).is_err());
+    #[test]
+    fn bank_rejects_legacy_flat_payload() {
+        // The pre-schema contract posted a flat {bankKey, name, questions}
+        // body; only schemaVersion 1 banks are accepted now.
+        let flat = json!({ "bankKey": "b1", "name": "N", "questions": [] });
+        let err = validate_bank(&flat).unwrap_err();
+        assert!(err.contains("unknown field"), "{err}");
 
-        let too_many = json!({
-            "bankKey": "b3", "name": "N",
-            "questions": [ { "type": "multi_choice", "options": ["1", "2", "3", "4", "5", "6"] } ]
-        });
-        assert!(validate_bank(&too_many).is_err());
+        let mut flat = flat;
+        flat["schemaVersion"] = json!(1);
+        let err = validate_bank(&flat).unwrap_err();
+        assert!(err.contains("unknown field"), "{err}");
+    }
 
-        let unknown_type_many = json!({
-            "bankKey": "b4", "name": "N",
-            "questions": [ { "options": ["1", "2", "3", "4", "5", "6"] } ]
-        });
-        assert!(validate_bank(&unknown_type_many).is_err());
+    #[test]
+    fn bank_rejects_short_answer_type() {
+        let err = question_err(json!({
+            "stableKey": "sk-1", "type": "short_answer",
+            "stem": "s", "answer": "essay", "analysis": "a"
+        }));
+        assert!(err.contains("short_answer"), "{err}");
+    }
 
+    #[test]
+    fn bank_rejects_duplicate_stable_keys() {
+        let bank = bank_with_questions(json!([
+            { "stableKey": "dup", "type": "fill_blank", "stem": "s", "answer": "a", "analysis": "n" },
+            { "stableKey": "dup", "type": "fill_blank", "stem": "s2", "answer": "b", "analysis": "n" }
+        ]));
+        let err = validate_bank(&bank).unwrap_err();
+        assert!(err.contains("duplicate stableKey"), "{err}");
+    }
+
+    #[test]
+    fn bank_rejects_bad_answers() {
+        let mut q = question_of("single_choice");
+        q["answer"] = json!("a");
+        assert!(question_err(q).contains("uppercase"));
+
+        let mut q = question_of("single_choice");
+        q["answer"] = json!("AB");
+        assert!(question_err(q).contains("exactly one option letter"));
+
+        let mut q = question_of("single_choice");
+        q["answer"] = json!("E"); // options are A-D
+        assert!(question_err(q).contains("do not exist"));
+
+        let mut q = question_of("multi_choice");
+        q["answer"] = json!("AA");
+        assert!(question_err(q).contains("repeat"));
+
+        let mut q = question_of("true_false");
+        q["answer"] = json!("True");
+        let err = question_err(q);
+        assert!(err.contains("true_false answer must be exactly"), "{err}");
+
+        let mut q = question_of("fill_blank");
+        q["answer"] = json!("  ");
+        assert!(question_err(q).contains("whitespace-only"));
+
+        let mut q = question_of("fill_blank");
+        q.as_object_mut().unwrap().remove("answer");
+        assert!(question_err(q).contains("missing required field: answer"));
+    }
+
+    #[test]
+    fn bank_rejects_bad_options() {
+        let mut q = question_of("single_choice");
+        q["options"] = json!(["1", "2", "3", "4", "5", "6"]);
+        assert!(question_err(q).contains("2-5 options"));
+
+        let mut q = question_of("single_choice");
+        q["options"] = json!(["1"]);
+        assert!(question_err(q).contains("2-5 options"));
+
+        let mut q = question_of("single_choice");
+        q["options"] = json!(["a", " "]);
+        assert!(question_err(q).contains("whitespace-only"));
+
+        let mut q = question_of("true_false");
+        q["options"] = json!(["true", "false"]);
+        assert!(question_err(q).contains("only allowed for single_choice/multi_choice"));
+
+        let mut q = question_of("multi_choice");
+        q.as_object_mut().unwrap().remove("options");
+        assert!(question_err(q).contains("missing required field: options"));
+    }
+
+    #[test]
+    fn bank_question_required_and_optional_fields() {
+        let mut q = question_of("fill_blank");
+        q.as_object_mut().unwrap().remove("stem");
+        assert!(question_err(q).contains("missing required field: stem"));
+
+        let mut q = question_of("fill_blank");
+        q.as_object_mut().unwrap().remove("analysis");
+        assert!(question_err(q).contains("missing required field: analysis"));
+
+        let mut q = question_of("fill_blank");
+        q["stem"] = json!("  ");
+        assert!(question_err(q).contains("whitespace-only"));
+
+        let mut q = question_of("fill_blank");
+        q.as_object_mut().unwrap().remove("stableKey");
+        assert!(question_err(q).contains("'id' or 'stableKey'"));
+
+        let mut q = question_of("fill_blank");
+        q["id"] = json!("  ");
+        assert!(question_err(q).contains("whitespace-only"));
+
+        let mut q = question_of("fill_blank");
+        q["oops"] = json!(true);
+        assert!(question_err(q).contains("unknown field"));
+
+        let mut q = question_of("fill_blank");
+        q["difficulty"] = json!("extreme");
+        assert!(question_err(q).contains("difficulty must be one of"));
+
+        let mut q = question_of("fill_blank");
+        q["tags"] = json!(["a", ""]);
+        assert!(question_err(q).contains("whitespace-only"));
+
+        let mut q = question_of("fill_blank");
+        q["sourceMeta"] = json!("x");
+        assert!(question_err(q).contains("sourceMeta must be an object"));
+
+        let mut q = question_of("fill_blank");
+        q["difficulty"] = json!("medium");
+        q["knowledgePoint"] = json!("kp");
+        q["subject"] = json!("sub");
+        q["tags"] = json!(["t"]);
+        assert!(validate_bank(&bank_with_questions(json!([q]))).is_ok());
+    }
+
+    #[test]
+    fn bank_schema_version_and_key_rules() {
+        let mut bank = valid_bank();
+        bank.as_object_mut().unwrap().remove("schemaVersion");
+        let err = validate_bank(&bank).unwrap_err();
+        assert!(err.contains("missing required field: schemaVersion"), "{err}");
+
+        for bad_version in [json!(2), json!("1"), json!(true), json!(1.5)] {
+            let mut bank = valid_bank();
+            bank["schemaVersion"] = bad_version.clone();
+            assert!(
+                validate_bank(&bank).is_err(),
+                "schemaVersion {bad_version} must be rejected"
+            );
+        }
+
+        let mut bank = valid_bank();
+        bank.as_object_mut().unwrap().remove("key");
+        assert!(validate_bank(&bank).unwrap_err().contains("missing required field: key"));
+
+        let bad_keys = [
+            String::new(),
+            "my bank".to_string(),
+            "a/b".to_string(),
+            "a\\b".to_string(),
+            format!("a\u{7f}b"),
+            "x".repeat(129),
+        ];
+        for bad_key in &bad_keys {
+            let mut bank = valid_bank();
+            bank["key"] = json!(bad_key);
+            assert!(validate_bank(&bank).is_err(), "key {bad_key:?} must be rejected");
+        }
+
+        let mut bank = valid_bank();
+        bank["key"] = json!("x".repeat(128));
+        assert!(validate_bank(&bank).is_ok());
+
+        // stableKey follows the same identifier rules
+        let mut bank = bank_with_questions(json!([question_of("fill_blank")]));
+        bank["questions"][0]["stableKey"] = json!("bad key");
+        assert!(validate_bank(&bank).unwrap_err().contains("whitespace"));
+
+        let mut bank = valid_bank();
+        bank.as_object_mut().unwrap().remove("name");
+        assert!(validate_bank(&bank).unwrap_err().contains("missing required field: name"));
+        let mut bank = valid_bank();
+        bank["name"] = json!("   ");
+        assert!(validate_bank(&bank).unwrap_err().contains("whitespace-only"));
+
+        let mut bank = valid_bank();
+        bank.as_object_mut().unwrap().remove("questions");
+        assert!(validate_bank(&bank).unwrap_err().contains("missing required field: questions"));
+        let mut bank = valid_bank();
+        bank["questions"] = json!({});
+        assert!(validate_bank(&bank).unwrap_err().contains("questions must be a list"));
+    }
+
+    #[test]
+    fn bank_unknown_and_optional_bank_fields() {
+        let mut bank = valid_bank();
+        bank["bankKey"] = json!("sgcc-safety");
+        let err = validate_bank(&bank).unwrap_err();
+        assert!(err.contains("unknown field"), "{err}");
+
+        let mut bank = valid_bank();
+        bank["subject"] = json!("  ");
+        assert!(validate_bank(&bank).unwrap_err().contains("whitespace-only"));
+
+        let mut bank = valid_bank();
+        bank["tags"] = json!("not-a-list");
+        assert!(validate_bank(&bank).unwrap_err().contains("tags must be a list"));
+
+        let mut bank = valid_bank();
+        bank["tags"] = json!(["ok", ""]);
+        assert!(validate_bank(&bank).unwrap_err().contains("whitespace-only"));
+
+        let mut bank = valid_bank();
+        bank["sourceMeta"] = json!([1]);
+        assert!(validate_bank(&bank).unwrap_err().contains("sourceMeta must be an object"));
+    }
+
+    #[test]
+    fn bank_wrapper_contract() {
+        // matching wrapper accepted; the key comes from the nested bank
+        let wrapped = json!({ "bankKey": "sgcc-safety", "bank": valid_bank() });
+        let (key, name, _, count) = validate_bank(&wrapped).unwrap();
+        assert_eq!(key, "sgcc-safety");
+        assert_eq!(name, "Bank One");
+        assert_eq!(count, 4);
+
+        // wrapper bankKey may be omitted
+        let (key, _, _, _) = validate_bank(&json!({ "bank": valid_bank() })).unwrap();
+        assert_eq!(key, "sgcc-safety");
+
+        // wrapper bankKey must match the nested key
+        let mismatched = json!({ "bankKey": "other", "bank": valid_bank() });
+        let err = validate_bank(&mismatched).unwrap_err();
+        assert!(err.contains("does not match"), "{err}");
+
+        // non-string wrapper bankKey is rejected
+        let bad_type = json!({ "bankKey": 123, "bank": valid_bank() });
+        let err = validate_bank(&bad_type).unwrap_err();
+        assert!(err.contains("bankKey must be a string"), "{err}");
+
+        // the nested bank must itself be schemaVersion 1 compliant
+        let legacy = json!({ "bankKey": "b2", "bank": { "name": "Nested", "questions": [] } });
+        let err = validate_bank(&legacy).unwrap_err();
+        assert!(err.contains("missing required field: schemaVersion"), "{err}");
+
+        // bankKey cannot substitute for a missing nested key
+        let mut keyless = valid_bank();
+        keyless.as_object_mut().unwrap().remove("key");
+        let err = validate_bank(&json!({ "bankKey": "sgcc-safety", "bank": keyless })).unwrap_err();
+        assert!(err.contains("missing required field: key"), "{err}");
+
+        // unknown wrapper fields are rejected
+        let extra = json!({ "bank": valid_bank(), "oops": true });
+        let err = validate_bank(&extra).unwrap_err();
+        assert!(err.contains("unknown field"), "{err}");
+    }
+
+    #[test]
+    fn bank_rejects_too_many_questions() {
+        let questions: Vec<serde_json::Value> = (0..=MAX_BANK_QUESTIONS)
+            .map(|i| {
+                json!({
+                    "stableKey": format!("sk-{i}"),
+                    "type": "fill_blank",
+                    "stem": "stem",
+                    "answer": "answer",
+                    "analysis": "analysis",
+                })
+            })
+            .collect();
+        let bank = bank_with_questions(json!(questions));
+        let err = validate_bank(&bank).unwrap_err();
+        assert!(err.contains("exceed"), "{err}");
+    }
+
+    #[test]
+    fn bank_rejects_oversized_payload() {
+        let bank = bank_with_questions(json!([{
+            "stableKey": "sk-big",
+            "type": "fill_blank",
+            "stem": "x".repeat(MAX_BANK_PAYLOAD_BYTES),
+            "answer": "a",
+            "analysis": "n",
+        }]));
+        let err = validate_bank(&bank).unwrap_err();
+        assert!(err.contains("exceeds"), "{err}");
+    }
+
+    #[test]
+    fn bank_storage_roundtrip() {
         // roundtrip storage: re-import bumps updated_at but keeps created_at
         let conn = test_conn();
+        let bank = valid_bank();
+        let (key, name, payload, count) = validate_bank(&bank).unwrap();
         let payload_json = serde_json::to_string(&payload).unwrap();
         run_bank_import(&conn, &key, &name, &payload_json, count, 1111).unwrap();
-        let stored = run_bank_get(&conn, "b1").unwrap().unwrap();
+        let stored = run_bank_get(&conn, &key).unwrap().unwrap();
         assert_eq!(stored.name, "Bank One");
-        assert_eq!(stored.question_count, 2);
+        assert_eq!(stored.question_count, 4);
+        assert_eq!(stored.payload, payload_json);
         assert_eq!(stored.created_at, 1111);
         assert_eq!(stored.updated_at, 1111);
 
-        run_bank_import(&conn, "b1", "Bank One v2", &payload_json, count, 2222).unwrap();
-        let stored = run_bank_get(&conn, "b1").unwrap().unwrap();
+        run_bank_import(&conn, &key, "Bank One v2", &payload_json, count, 2222).unwrap();
+        let stored = run_bank_get(&conn, &key).unwrap().unwrap();
         assert_eq!(stored.name, "Bank One v2");
         assert_eq!(stored.created_at, 1111);
         assert_eq!(stored.updated_at, 2222);
