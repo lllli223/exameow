@@ -1660,6 +1660,45 @@ mod tests {
     }
 
     #[test]
+    fn init_migrates_early_study_schema_and_backfills_review_events() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE study_attempts (
+               seq INTEGER PRIMARY KEY AUTOINCREMENT,
+               idempotency_key TEXT NOT NULL UNIQUE, session_key TEXT NOT NULL,
+               question_key TEXT NOT NULL, session_question_id TEXT NOT NULL DEFAULT '',
+               question_snapshot TEXT NOT NULL DEFAULT '', user_answer TEXT NOT NULL DEFAULT '',
+               correct_answer TEXT NOT NULL DEFAULT '', is_correct INTEGER,
+               flagged INTEGER NOT NULL DEFAULT 0, subject TEXT, chapter TEXT,
+               knowledge_point TEXT, submitted_at INTEGER NOT NULL, created_at INTEGER NOT NULL
+             );
+             CREATE TABLE study_consumers (
+               consumer TEXT PRIMARY KEY, cursor INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL
+             );
+             INSERT INTO study_attempts
+               (idempotency_key,session_key,question_key,is_correct,flagged,submitted_at,created_at)
+             VALUES ('old-wrong','s','q1',0,0,1,10),
+                    ('old-flagged','s','q2',1,1,2,11),
+                    ('old-correct','s','q3',1,0,3,12);
+             INSERT INTO study_consumers (consumer,cursor,updated_at) VALUES ('chatgpt',999,20);"
+        ).unwrap();
+
+        init_tables(&conn).unwrap();
+        let has_device: bool = conn
+            .prepare("PRAGMA table_info(study_attempts)").unwrap()
+            .query_map([], |row| row.get::<_, String>(1)).unwrap()
+            .filter_map(Result::ok).any(|name| name == "device_id");
+        assert!(has_device);
+        let events: Vec<(i64, String)> = conn
+            .prepare("SELECT attempt_seq, reason FROM study_review_events ORDER BY seq").unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap()
+            .map(Result::unwrap).collect();
+        assert_eq!(events, vec![(1, "wrong".into()), (2, "flagged".into())]);
+        let consumers: i64 = conn.query_row("SELECT COUNT(*) FROM study_consumers", [], |r| r.get(0)).unwrap();
+        assert_eq!(consumers, 0);
+    }
+
+    #[test]
     fn batch_dedup_flag_toggle_and_conflict() {
         let conn = test_conn();
         let batch = [
