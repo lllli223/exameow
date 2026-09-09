@@ -1,88 +1,105 @@
 {
   "schemaVersion": 1,
-  "key": "sgcc-safety-example",
-  "name": "国网安全生产基础示例题库",
-  "subject": "电气安全",
-  "chapter": "第一章 安全生产法规与技术措施",
-  "tags": ["sgcc", "电气安全", "example"],
+  "key": "sgcc-iot-basics-example",
+  "name": "???????????????",
+  "subject": "?????",
+  "chapter": "?????",
+  "tags": [
+    "sgcc",
+    "????",
+    "???",
+    "example"
+  ],
   "sourceMeta": {
     "origin": "exameowctl example bank",
     "generatedAt": "2026-09-09",
-    "note": "Illustrates study-bank schemaVersion 1; see tools/exameowctl/README.md"
+    "note": "???? study-bank schemaVersion 1 ???????????"
   },
   "questions": [
     {
-      "stableKey": "sgcc-safety-0001",
+      "stableKey": "sgcc-iot-example-0001",
       "type": "single_choice",
-      "stem": "《安全生产法》规定的安全生产工作方针是（）。",
+      "stem": "?????RFID ?????????",
       "options": [
-        "安全第一、预防为主、综合治理",
-        "安全第一、效益优先",
-        "生产优先、安全辅助",
-        "预防为主、事后处理"
+        "Radio Frequency Identification",
+        "Real-time Frequency Interface",
+        "Remote File Identification",
+        "Radio Frame Internet Device"
       ],
       "answer": "A",
-      "analysis": "《安全生产法》第三条规定，安全生产工作应当以人为本，坚持安全第一、预防为主、综合治理的方针。",
-      "subject": "电气安全",
-      "chapter": "第一章 安全生产法规与技术措施",
-      "knowledgePoint": "安全生产方针",
+      "analysis": "RFID?Radio Frequency Identification??????????????????????????????",
+      "subject": "?????",
+      "chapter": "?????",
+      "knowledgePoint": "RFID ????",
       "difficulty": "easy",
-      "tags": ["法规"],
-      "sourceMeta": { "law": "安全生产法", "article": 3 }
+      "tags": [
+        "??",
+        "???"
+      ]
     },
     {
-      "stableKey": "sgcc-safety-0002",
+      "stableKey": "sgcc-iot-example-0002",
       "type": "multi_choice",
-      "stem": "在电气设备上工作，保证安全的技术措施包括（）。",
+      "stem": "???????????????????????????",
       "options": [
-        "停电",
-        "验电",
-        "装设接地线",
-        "办理工作票",
-        "悬挂标示牌和装设遮栏"
+        "RFID",
+        "ZigBee",
+        "Bluetooth",
+        "NFC",
+        "BGP"
       ],
-      "answer": "ABCE",
-      "analysis": "保证安全的技术措施是停电、验电、装设接地线、悬挂标示牌和装设遮栏；办理工作票属于组织措施，故不选D。",
-      "subject": "电气安全",
-      "chapter": "第一章 安全生产法规与技术措施",
-      "knowledgePoint": "保证安全的技术措施",
+      "answer": "ABCD",
+      "analysis": "RFID?ZigBee?Bluetooth????? NFC?Near Field Communication??????????????????BGP?Border Gateway Protocol????????????????????",
+      "subject": "?????",
+      "chapter": "?????",
+      "knowledgePoint": "?????????",
       "difficulty": "medium",
-      "tags": ["技术措施"]
+      "tags": [
+        "????",
+        "??"
+      ]
     },
     {
-      "stableKey": "sgcc-safety-0003",
+      "stableKey": "sgcc-iot-example-0003",
       "type": "true_false",
-      "stem": "安全色中的红色表示禁止、停止以及防火的意思。",
+      "stem": "ZigBee ???? IEEE 802.15.4 ???????",
       "answer": "true",
-      "analysis": "GB 2893 规定：红色表示禁止、停止、危险以及防火；黄色表示警告；蓝色表示指令；绿色表示安全状态提示。",
-      "subject": "电气安全",
-      "chapter": "第一章 安全生产法规与技术措施",
-      "knowledgePoint": "安全色",
+      "analysis": "IEEE 802.15.4 ??????????????? MAC ??? ZigBee ??????????",
+      "subject": "?????",
+      "chapter": "?????",
+      "knowledgePoint": "ZigBee ? IEEE 802.15.4",
       "difficulty": "easy"
     },
     {
-      "stableKey": "sgcc-safety-0004",
+      "stableKey": "sgcc-iot-example-0004",
       "type": "fill_blank",
-      "stem": "一般情况下，通过人体的工频电流超过（）mA时，可危及生命。",
-      "answer": "50",
-      "analysis": "工频电流超过 50mA 即可危及生命，因此触电防护与安全电压限值均以此为参考。",
-      "subject": "电气安全",
-      "chapter": "第一章 安全生产法规与技术措施",
-      "knowledgePoint": "电流对人体的危害",
-      "difficulty": "medium"
+      "stem": "NFC ?????????",
+      "answer": "Near Field Communication",
+      "analysis": "NFC?Near Field Communication???????????????????",
+      "subject": "?????",
+      "chapter": "?????",
+      "knowledgePoint": "NFC ????",
+      "difficulty": "easy"
     },
     {
-      "id": "legacy-import-007",
+      "id": "legacy-import-iot-0005",
       "type": "single_choice",
-      "stem": "验电时，应使用相应电压等级、合格的（）验电器，并在装设接地线前先验电。",
-      "options": ["感应式", "电容式", "接触式", "电阻式"],
-      "answer": "C",
-      "analysis": "验电应使用相应电压等级且试验合格的接触式验电器；先验电、后装设接地线是倒闸操作的基本要求。",
-      "subject": "电气安全",
-      "chapter": "第二章 倒闸操作",
-      "knowledgePoint": "验电",
-      "difficulty": "hard",
-      "tags": ["倒闸操作"]
+      "stem": "???????????????????????????",
+      "options": [
+        "???",
+        "???",
+        "???",
+        "???"
+      ],
+      "answer": "A",
+      "analysis": "?????????RFID ?????????????????????????????????",
+      "subject": "?????",
+      "chapter": "?????",
+      "knowledgePoint": "???????",
+      "difficulty": "medium",
+      "tags": [
+        "????"
+      ]
     }
   ]
 }
