@@ -18,6 +18,7 @@ pub struct AppState {
     pub config_store: ConfigStore,
     pub relay: crate::relay::RelayState,
     pub admin_token: Mutex<String>,
+    pub study_token: String,
 }
 
 #[derive(Deserialize)]

@@ -1,5 +1,6 @@
 mod relay;
 mod routes;
+mod study;
 
 use axum::{
     routing::{delete, get, post},
@@ -19,6 +20,13 @@ async fn main() {
     });
     let db_path = std::env::var("EXAM_DB_PATH").unwrap_or_else(|_| "./exameow.db".to_string());
     let relay = relay::init_db(&db_path).unwrap_or_else(|e| panic!("failed to init exam db at {db_path}: {e}"));
+    {
+        let conn = relay
+            .conn
+            .lock()
+            .unwrap_or_else(|e| panic!("relay db lock failed: {e}"));
+        study::init_tables(&conn).unwrap_or_else(|e| panic!("failed to init study tables: {e}"));
+    }
     let admin_token = relay::load_admin_token();
     if admin_token == "pass" {
         println!("WARNING: ADMIN_TOKEN is the default \"pass\" — change it at /#/admin before exposing this server");
@@ -28,7 +36,16 @@ async fn main() {
         config_store,
         relay,
         admin_token: Mutex::new(admin_token),
+        study_token: std::env::var("STUDY_SYNC_TOKEN")
+            .unwrap_or_default()
+            .trim()
+            .to_string(),
     });
+    if state.study_token.is_empty() {
+        println!("Study sync disabled: STUDY_SYNC_TOKEN is not set or blank");
+    } else {
+        println!("Study sync enabled (/api/study/*)");
+    }
 
     {
         let state = state.clone();
@@ -64,6 +81,7 @@ async fn main() {
         .route("/api/exam/admin/code/{code}", delete(relay::admin_delete_handler))
         .route("/api/exam/admin/code/{code}/restore", post(relay::admin_restore_handler))
         .route("/api/exam/admin/token", post(relay::admin_change_token_handler))
+        .nest("/api/study", study::router(state.clone()))
         .fallback_service(ServeDir::new(&static_dir))
         .layer(CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any))
         .with_state(state);
