@@ -140,14 +140,14 @@ All requests: `Authorization: Bearer EXAMEOW_TOKEN`, `Accept: application/json`,
 |---|---|
 | `status` | `GET /api/study/health` |
 | `feed` | `GET /api/study/feed?consumer=<key>&subject=<normalized>&chapter=<normalized>&after=<cursor>&limit=<n>` (filters/`after`/`limit` only when given) |
-| `ack` | `POST /api/study/feed/ack` with body `{"consumer": "<key>", "cursor": "<cursor>", "subject": ..., "chapter": ...}` (subject/chapter only when derived from flags) |
+| `ack` | `POST /api/study/feed/ack` with body `{"consumer": "<key>", "cursor": <integer>, "subject": ..., "chapter": ...}` (subject/chapter only when derived from flags) |
 | `session latest` | `GET /api/study/sessions/latest` |
 | `question history` | `GET /api/study/questions/<questionKey>/history?limit=<n>` |
 | `bank import` | `POST /api/study/banks/import` with the validated bank JSON as body |
 | `bank list` | `GET /api/study/banks` |
 | `bank show` | `GET /api/study/banks/<bankKey>` |
 
-Server responses are parsed as JSON and passed through verbatim. A non-JSON body is wrapped as `{"raw": "..."}`. Human-mode output recognizes common item/cursor field names (`items`, `nextCursor`, ...) and otherwise pretty-prints the whole payload.
+Server responses are parsed as JSON and passed through verbatim. A non-JSON body is wrapped as `{"raw": "..."}`. Human-mode output recognizes the server's `attempts` list and numeric `nextCursor` (plus a few compatibility field names) and otherwise pretty-prints the whole payload.
 
 ## Exit codes
 
@@ -183,4 +183,4 @@ No network access, no environment variables required.
 
 - The server side of `/api/study` is the user's private deployment; this CLI only implements the client, and passes response payloads through rather than assuming a fixed shape.
 - Only Bearer-token auth is supported; TLS must be valid (or use plain HTTP on a trusted LAN).
-- Feed cursors are opaque server tokens; the client's only cursor-safety mechanism is the consumer-key namespace above.
+- Feed cursors are non-negative, monotonic server event-sequence integers. Treat them as server-owned positions: only ACK a cursor returned by the matching consumer/filter feed.
