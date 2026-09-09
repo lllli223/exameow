@@ -82,6 +82,20 @@ def _find_str(payload, names):
     return None
 
 
+def _find_cursor(payload, names):
+    if not isinstance(payload, dict):
+        return None
+    for name in names:
+        value = payload.get(name)
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, int) and value >= 0:
+            return str(value)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
 def _print_items(items, indent=""):
     for item in items:
         print(indent + compact(item))
@@ -165,8 +179,8 @@ def cmd_feed(args):
         emit_json(payload if payload is not None else {})
         return EXIT_OK
     print("consumer: %s" % params["consumer"])
-    items = _find_list(payload, ("items", "mistakes", "entries", "events", "results", "feed"))
-    cursor = _find_str(payload, ("nextCursor", "next_cursor", "cursor"))
+    items = _find_list(payload, ("attempts", "items", "mistakes", "entries", "events", "results", "feed"))
+    cursor = _find_cursor(payload, ("nextCursor", "next_cursor", "cursor"))
     if items is not None or cursor is not None:
         if items is not None:
             print("items: %d" % len(items))
@@ -344,6 +358,16 @@ def positive_int(value):
     return number
 
 
+def nonnegative_int(value):
+    try:
+        number = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError("invalid integer: %r" % value)
+    if number < 0:
+        raise argparse.ArgumentTypeError("must be a non-negative integer")
+    return number
+
+
 def _add_consumer_filters(parser, with_ack_warning=False):
     parser.add_argument(
         "--consumer", default=consumer.DEFAULT_CONSUMER, metavar="NAME",
@@ -377,8 +401,8 @@ def build_parser():
 
     p = subparsers.add_parser("feed", help="list unseen mistakes from the study feed")
     _add_consumer_filters(p)
-    p.add_argument("--after", default=None, metavar="CURSOR",
-                   help="resume before/at this server cursor (opaque token)")
+    p.add_argument("--after", type=nonnegative_int, default=None, metavar="CURSOR",
+                   help="resume after this numeric server cursor")
     p.add_argument("--limit", type=positive_int, default=None, metavar="N",
                    help="maximum number of items to return")
     add_json(p)
@@ -387,7 +411,7 @@ def build_parser():
     p = subparsers.add_parser(
         "ack", help="acknowledge mistakes up to a cursor; use the SAME "
                     "--consumer/--subject/--chapter as the feed that produced it")
-    p.add_argument("cursor", help="opaque cursor returned by 'feed'")
+    p.add_argument("cursor", type=nonnegative_int, help="numeric cursor returned by 'feed'")
     _add_consumer_filters(p)
     add_json(p)
     p.set_defaults(func=cmd_ack)

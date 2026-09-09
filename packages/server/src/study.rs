@@ -63,6 +63,16 @@ fn sha256_hex(text: &str) -> String {
 }
 
 pub fn init_tables(conn: &Connection) -> Result<(), String> {
+    let had_review_events = conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'study_review_events'",
+            [],
+            |_| Ok(()),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?
+        .is_some();
+
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS study_attempts (
           seq INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -84,6 +94,13 @@ pub fn init_tables(conn: &Connection) -> Result<(), String> {
         );
         CREATE INDEX IF NOT EXISTS idx_study_attempts_session ON study_attempts(session_key);
         CREATE INDEX IF NOT EXISTS idx_study_attempts_question ON study_attempts(question_key);
+        CREATE TABLE IF NOT EXISTS study_review_events (
+          seq INTEGER PRIMARY KEY AUTOINCREMENT,
+          attempt_seq INTEGER NOT NULL,
+          reason TEXT NOT NULL,
+          created_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_study_review_events_attempt ON study_review_events(attempt_seq);
         CREATE TABLE IF NOT EXISTS study_consumers (
           consumer TEXT PRIMARY KEY,
           cursor INTEGER NOT NULL DEFAULT 0,
@@ -117,6 +134,20 @@ pub fn init_tables(conn: &Connection) -> Result<(), String> {
     };
     if !has_device_id {
         conn.execute("ALTER TABLE study_attempts ADD COLUMN device_id TEXT NOT NULL DEFAULT ''", [])
+            .map_err(|e| e.to_string())?;
+    }
+
+    if !had_review_events {
+        // Backfill review-worthy attempts from early builds and reset old attempt-seq cursors.
+        conn.execute(
+            "INSERT INTO study_review_events (attempt_seq, reason, created_at)
+             SELECT seq, CASE WHEN is_correct = 0 THEN 'wrong' ELSE 'flagged' END, created_at
+             FROM study_attempts
+             WHERE is_correct = 0 OR flagged = 1",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
+        conn.execute("DELETE FROM study_consumers", [])
             .map_err(|e| e.to_string())?;
     }
     Ok(())
@@ -268,11 +299,14 @@ pub struct AttemptOut {
     pub submitted_at: i64,
     #[serde(rename = "createdAt")]
     pub created_at: i64,
+    #[serde(rename = "feedSeq", skip_serializing_if = "Option::is_none")]
+    pub feed_seq: Option<i64>,
     #[serde(skip)]
     pub snapshot_raw: String,
 }
 
 const ATTEMPT_COLUMNS: &str = "seq, idempotency_key, session_key, device_id, question_key, session_question_id, question_snapshot, user_answer, correct_answer, is_correct, flagged, subject, chapter, knowledge_point, submitted_at, created_at";
+const ATTEMPT_COLUMNS_A: &str = "a.seq, a.idempotency_key, a.session_key, a.device_id, a.question_key, a.session_question_id, a.question_snapshot, a.user_answer, a.correct_answer, a.is_correct, a.flagged, a.subject, a.chapter, a.knowledge_point, a.submitted_at, a.created_at";
 
 fn map_attempt(row: &rusqlite::Row<'_>) -> rusqlite::Result<AttemptOut> {
     let snapshot_raw: String = row.get(6)?;
@@ -298,8 +332,15 @@ fn map_attempt(row: &rusqlite::Row<'_>) -> rusqlite::Result<AttemptOut> {
         knowledge_point: row.get(13)?,
         submitted_at: row.get(14)?,
         created_at: row.get(15)?,
+        feed_seq: None,
         snapshot_raw,
     })
+}
+
+fn map_feed_attempt(row: &rusqlite::Row<'_>) -> rusqlite::Result<AttemptOut> {
+    let mut attempt = map_attempt(row)?;
+    attempt.feed_seq = Some(row.get(16)?);
+    Ok(attempt)
 }
 
 fn require_key(value: Option<String>, field: &str) -> Result<String, String> {
@@ -440,6 +481,20 @@ fn validate_batch(inputs: &[AttemptInput], now: i64) -> Result<Vec<AttemptRow>, 
         .collect()
 }
 
+fn insert_review_event(
+    conn: &Connection,
+    attempt_seq: i64,
+    reason: &str,
+    now: i64,
+) -> Result<(), String> {
+    conn.execute(
+        "INSERT INTO study_review_events (attempt_seq, reason, created_at) VALUES (?1, ?2, ?3)",
+        params![attempt_seq, reason, now],
+    )
+    .map(|_| ())
+    .map_err(|e| e.to_string())
+}
+
 fn insert_batch(conn: &Connection, rows: &[AttemptRow], now: i64) -> Result<BatchCounts, String> {
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     let mut counts = BatchCounts {
@@ -477,6 +532,11 @@ fn insert_batch(conn: &Connection, rows: &[AttemptRow], now: i64) -> Result<Batc
             )
             .map_err(|e| e.to_string())?;
         if inserted > 0 {
+            let attempt_seq = tx.last_insert_rowid();
+            if row.is_correct == Some(false) || row.flagged {
+                let reason = if row.is_correct == Some(false) { "wrong" } else { "flagged" };
+                insert_review_event(&tx, attempt_seq, reason, now)?;
+            }
             counts.accepted += 1;
             touched_sessions.push(row.session_key.clone());
             continue;
@@ -496,6 +556,9 @@ fn insert_batch(conn: &Connection, rows: &[AttemptRow], now: i64) -> Result<Batc
                 params![row.flagged, existing.seq],
             )
             .map_err(|e| e.to_string())?;
+            if !existing.flagged && row.flagged {
+                insert_review_event(&tx, existing.seq, "flagged", now)?;
+            }
             counts.updated += 1;
             touched_sessions.push(row.session_key.clone());
         } else {
@@ -743,22 +806,28 @@ fn run_feed(
         .unwrap_or(0);
     let start = after.unwrap_or(stored);
     let sql = format!(
-        "SELECT {ATTEMPT_COLUMNS} FROM study_attempts
-         WHERE seq > ?1
-           AND (is_correct = 0 OR flagged = 1)
-           AND (?2 IS NULL OR subject = ?2)
-           AND (?3 IS NULL OR chapter = ?3)
-         ORDER BY seq ASC LIMIT ?4"
+        "SELECT {ATTEMPT_COLUMNS_A}, MAX(e.seq) AS feed_seq
+         FROM study_review_events e
+         JOIN study_attempts a ON a.seq = e.attempt_seq
+         WHERE e.seq > ?1
+           AND (a.is_correct = 0 OR a.flagged = 1)
+           AND (?2 IS NULL OR a.subject = ?2)
+           AND (?3 IS NULL OR a.chapter = ?3)
+         GROUP BY a.seq
+         ORDER BY feed_seq ASC LIMIT ?4"
     );
     let mut stmt = conn
         .prepare(&sql)
         .map_err(|e| err_msg(StatusCode::INTERNAL_SERVER_ERROR, "db_error", e))?;
     let attempts: Vec<AttemptOut> = stmt
-        .query_map(params![start, subject, chapter, limit], map_attempt)
+        .query_map(params![start, subject, chapter, limit], map_feed_attempt)
         .map_err(|e| err_msg(StatusCode::INTERNAL_SERVER_ERROR, "db_error", e))?
         .filter_map(|r| r.ok())
         .collect();
-    let next_cursor = attempts.last().map(|a| a.seq).unwrap_or(start);
+    let next_cursor = attempts
+        .last()
+        .and_then(|a| a.feed_seq)
+        .unwrap_or(start);
     Ok(FeedPage {
         stored_cursor: start,
         next_cursor,
@@ -769,7 +838,7 @@ fn run_feed(
 fn run_ack(conn: &Connection, consumer: &str, cursor: i64) -> Result<i64, Err> {
     let max_seq: i64 = conn
         .query_row(
-            "SELECT COALESCE(MAX(seq), 0) FROM study_attempts",
+            "SELECT COALESCE(MAX(seq), 0) FROM study_review_events",
             [],
             |r| r.get(0),
         )
@@ -1330,7 +1399,9 @@ mod tests {
         assert_eq!(page.stored_cursor, 0);
         let seqs: Vec<i64> = page.attempts.iter().map(|a| a.seq).collect();
         assert_eq!(seqs, vec![1, 3, 5]);
-        assert_eq!(page.next_cursor, 5);
+        let feed_seqs: Vec<i64> = page.attempts.iter().filter_map(|a| a.feed_seq).collect();
+        assert_eq!(feed_seqs, vec![1, 2, 3]);
+        assert_eq!(page.next_cursor, 3);
 
         // feed must not implicitly advance the cursor
         let stored: Option<i64> = conn
@@ -1344,8 +1415,8 @@ mod tests {
         assert_eq!(stored, None);
 
         // explicit after overrides the stored cursor
-        let page = run_feed(&conn, "cli", Some(3), None, None, 100).unwrap();
-        assert_eq!(page.stored_cursor, 3);
+        let page = run_feed(&conn, "cli", Some(2), None, None, 100).unwrap();
+        assert_eq!(page.stored_cursor, 2);
         let seqs: Vec<i64> = page.attempts.iter().map(|a| a.seq).collect();
         assert_eq!(seqs, vec![5]);
 
@@ -1355,20 +1426,47 @@ mod tests {
         assert_eq!(seqs, vec![1, 3]);
 
         // ack stores the cursor monotonically; ahead-of-max is rejected
-        assert_eq!(run_ack(&conn, "cli", 5).unwrap(), 5);
-        assert_eq!(run_ack(&conn, "cli", 3).unwrap(), 5);
-        let ahead = run_ack(&conn, "cli", 6).unwrap_err();
+        assert_eq!(run_ack(&conn, "cli", 3).unwrap(), 3);
+        assert_eq!(run_ack(&conn, "cli", 2).unwrap(), 3);
+        let ahead = run_ack(&conn, "cli", 4).unwrap_err();
         assert_eq!(ahead.0, StatusCode::BAD_REQUEST);
 
         // after ack the feed is empty and nextCursor stays at the stored cursor
         let page = run_feed(&conn, "cli", None, None, None, 100).unwrap();
         assert!(page.attempts.is_empty());
-        assert_eq!(page.stored_cursor, 5);
-        assert_eq!(page.next_cursor, 5);
+        assert_eq!(page.stored_cursor, 3);
+        assert_eq!(page.next_cursor, 3);
 
         // a separate consumer starts from 0
         let page = run_feed(&conn, "phone", None, None, None, 100).unwrap();
         assert_eq!(page.stored_cursor, 0);
+    }
+
+    #[test]
+    fn late_flag_after_ack_creates_new_review_event() {
+        let conn = test_conn();
+        let initial = [
+            input(attempt_json("late1", "s1", "q1", json!(true), false, "math", 1000)),
+            input(attempt_json("late2", "s1", "q2", json!(false), false, "math", 1010)),
+        ];
+        process_batch(&conn, &initial, 5000).unwrap();
+
+        let first = run_feed(&conn, "chatgpt", None, None, None, 100).unwrap();
+        assert_eq!(first.attempts.len(), 1);
+        assert_eq!(first.attempts[0].question_key, "q2");
+        assert_eq!(first.next_cursor, 1);
+        assert_eq!(run_ack(&conn, "chatgpt", 1).unwrap(), 1);
+
+        let flagged = attempt_json("late1", "s1", "q1", json!(true), true, "math", 1000);
+        let update_counts = process_batch(&conn, &[input(flagged)], 6000).unwrap();
+        assert_eq!(counts(&update_counts), (0, 1, 0));
+
+        let second = run_feed(&conn, "chatgpt", None, None, None, 100).unwrap();
+        assert_eq!(second.attempts.len(), 1);
+        assert_eq!(second.attempts[0].question_key, "q1");
+        assert!(second.attempts[0].flagged);
+        assert_eq!(second.attempts[0].feed_seq, Some(2));
+        assert_eq!(second.next_cursor, 2);
     }
 
     #[test]
