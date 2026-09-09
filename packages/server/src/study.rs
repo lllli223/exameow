@@ -68,6 +68,7 @@ pub fn init_tables(conn: &Connection) -> Result<(), String> {
           seq INTEGER PRIMARY KEY AUTOINCREMENT,
           idempotency_key TEXT NOT NULL UNIQUE,
           session_key TEXT NOT NULL,
+          device_id TEXT NOT NULL DEFAULT '',
           question_key TEXT NOT NULL,
           session_question_id TEXT NOT NULL DEFAULT '',
           question_snapshot TEXT NOT NULL DEFAULT '',
@@ -103,7 +104,22 @@ pub fn init_tables(conn: &Connection) -> Result<(), String> {
           updated_at INTEGER NOT NULL
         );",
     )
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string())?;
+
+    // Forward-compatible migration for databases created by early study-sync builds.
+    let has_device_id = {
+        let mut stmt = conn.prepare("PRAGMA table_info(study_attempts)").map_err(|e| e.to_string())?;
+        let cols = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .map_err(|e| e.to_string())?;
+        let found = cols.filter_map(Result::ok).any(|name| name == "device_id");
+        found
+    };
+    if !has_device_id {
+        conn.execute("ALTER TABLE study_attempts ADD COLUMN device_id TEXT NOT NULL DEFAULT ''", [])
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 fn lock_conn(state: &AppState) -> Result<MutexGuard<'_, Connection>, Err> {
@@ -180,6 +196,8 @@ pub struct AttemptInput {
     pub idempotency_key: Option<String>,
     #[serde(rename = "sessionKey")]
     pub session_key: Option<String>,
+    #[serde(rename = "deviceId")]
+    pub device_id: Option<String>,
     #[serde(rename = "questionKey")]
     pub question_key: Option<String>,
     #[serde(rename = "sessionQuestionId")]
@@ -205,6 +223,7 @@ pub struct AttemptInput {
 pub struct AttemptRow {
     pub idempotency_key: String,
     pub session_key: String,
+    pub device_id: String,
     pub question_key: String,
     pub session_question_id: String,
     pub question_snapshot: String,
@@ -226,6 +245,8 @@ pub struct AttemptOut {
     pub idempotency_key: String,
     #[serde(rename = "sessionKey")]
     pub session_key: String,
+    #[serde(rename = "deviceId")]
+    pub device_id: String,
     #[serde(rename = "questionKey")]
     pub question_key: String,
     #[serde(rename = "sessionQuestionId")]
@@ -251,10 +272,10 @@ pub struct AttemptOut {
     pub snapshot_raw: String,
 }
 
-const ATTEMPT_COLUMNS: &str = "seq, idempotency_key, session_key, question_key, session_question_id, question_snapshot, user_answer, correct_answer, is_correct, flagged, subject, chapter, knowledge_point, submitted_at, created_at";
+const ATTEMPT_COLUMNS: &str = "seq, idempotency_key, session_key, device_id, question_key, session_question_id, question_snapshot, user_answer, correct_answer, is_correct, flagged, subject, chapter, knowledge_point, submitted_at, created_at";
 
 fn map_attempt(row: &rusqlite::Row<'_>) -> rusqlite::Result<AttemptOut> {
-    let snapshot_raw: String = row.get(5)?;
+    let snapshot_raw: String = row.get(6)?;
     let question_snapshot = if snapshot_raw.is_empty() {
         serde_json::Value::Null
     } else {
@@ -264,18 +285,19 @@ fn map_attempt(row: &rusqlite::Row<'_>) -> rusqlite::Result<AttemptOut> {
         seq: row.get(0)?,
         idempotency_key: row.get(1)?,
         session_key: row.get(2)?,
-        question_key: row.get(3)?,
-        session_question_id: row.get(4)?,
+        device_id: row.get(3)?,
+        question_key: row.get(4)?,
+        session_question_id: row.get(5)?,
         question_snapshot,
-        user_answer: row.get(6)?,
-        correct_answer: row.get(7)?,
-        is_correct: row.get::<_, Option<i64>>(8)?.map(|v| v != 0),
-        flagged: row.get::<_, i64>(9)? != 0,
-        subject: row.get(10)?,
-        chapter: row.get(11)?,
-        knowledge_point: row.get(12)?,
-        submitted_at: row.get(13)?,
-        created_at: row.get(14)?,
+        user_answer: row.get(7)?,
+        correct_answer: row.get(8)?,
+        is_correct: row.get::<_, Option<i64>>(9)?.map(|v| v != 0),
+        flagged: row.get::<_, i64>(10)? != 0,
+        subject: row.get(11)?,
+        chapter: row.get(12)?,
+        knowledge_point: row.get(13)?,
+        submitted_at: row.get(14)?,
+        created_at: row.get(15)?,
         snapshot_raw,
     })
 }
@@ -329,6 +351,7 @@ fn normalize_snapshot(value: Option<&serde_json::Value>) -> Result<String, Strin
 fn normalize_attempt(input: &AttemptInput, now: i64) -> Result<AttemptRow, String> {
     let idempotency_key = require_key(input.idempotency_key.clone(), "idempotencyKey")?;
     let session_key = require_key(input.session_key.clone(), "sessionKey")?;
+    let device_id = optional_text(input.device_id.clone(), "deviceId", MAX_KEY_LEN)?;
     let question_key = require_key(input.question_key.clone(), "questionKey")?;
     let session_question_id = optional_text(
         input.session_question_id.clone(),
@@ -353,6 +376,7 @@ fn normalize_attempt(input: &AttemptInput, now: i64) -> Result<AttemptRow, Strin
     Ok(AttemptRow {
         idempotency_key,
         session_key,
+        device_id,
         question_key,
         session_question_id,
         question_snapshot,
@@ -373,6 +397,7 @@ fn normalize_attempt(input: &AttemptInput, now: i64) -> Result<AttemptRow, Strin
 /// assigns it), so an omitted value matches whatever is stored.
 fn rows_match(existing: &AttemptOut, incoming: &AttemptRow) -> bool {
     if existing.session_key != incoming.session_key
+        || existing.device_id != incoming.device_id
         || existing.question_key != incoming.question_key
         || existing.session_question_id != incoming.session_question_id
         || existing.snapshot_raw != incoming.question_snapshot
@@ -427,14 +452,15 @@ fn insert_batch(conn: &Connection, rows: &[AttemptRow], now: i64) -> Result<Batc
         let inserted = tx
             .execute(
                 "INSERT INTO study_attempts
-                   (idempotency_key, session_key, question_key, session_question_id,
+                   (idempotency_key, session_key, device_id, question_key, session_question_id,
                     question_snapshot, user_answer, correct_answer, is_correct, flagged,
                     subject, chapter, knowledge_point, submitted_at, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
                  ON CONFLICT(idempotency_key) DO NOTHING",
                 params![
                     row.idempotency_key,
                     row.session_key,
+                    row.device_id,
                     row.question_key,
                     row.session_question_id,
                     row.question_snapshot,
@@ -1171,6 +1197,7 @@ mod tests {
         json!({
             "idempotencyKey": idem,
             "sessionKey": session,
+            "deviceId": "test-device",
             "questionKey": qkey,
             "sessionQuestionId": format!("{session}#{qkey}"),
             "questionSnapshot": { "id": qkey, "stem": format!("stem of {qkey}") },
@@ -1384,6 +1411,7 @@ mod tests {
         assert_eq!(all[1].idempotency_key, "h2");
         assert_eq!(all[2].idempotency_key, "h1");
         assert!(all[0].flagged);
+        assert_eq!(all[0].device_id, "test-device");
         assert_eq!(all[0].question_snapshot["id"], "q9");
 
         let limited = run_history(&conn, "q9", 2).unwrap();

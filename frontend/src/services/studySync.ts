@@ -39,6 +39,7 @@ export interface StudyQuestionSnapshot {
 export interface StudyAttemptPayload {
   idempotencyKey: string
   sessionKey: string
+  deviceId: string
   questionKey: string
   sessionQuestionId: string
   questionSnapshot: StudyQuestionSnapshot
@@ -50,6 +51,12 @@ export interface StudyAttemptPayload {
   chapter: string
   knowledgePoint: string
   submittedAt: number
+}
+
+export interface StudySessionFinishPayload {
+  sessionKey: string
+  startedAt: number
+  finishedAt: number
 }
 
 export interface FlushResult {
@@ -66,6 +73,7 @@ export interface ConnectionTestResult {
 const CONFIG_KEY = 'exameow-study-sync-config'
 const DEVICE_KEY = 'exameow-study-sync-device'
 const OUTBOX_KEY = 'exameow-study-sync-outbox'
+const SESSION_OUTBOX_KEY = 'exameow-study-sync-session-outbox'
 
 /** Keep the outbox bounded so localStorage cannot grow without limit */
 const MAX_OUTBOX_ENTRIES = 500
@@ -92,6 +100,7 @@ function safeSet(key: string, value: string) {
 }
 
 function randomId(): string {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID()
   return Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10)
 }
 
@@ -105,12 +114,31 @@ function loadOutbox(): StudyAttemptPayload[] {
   }
 }
 
-function persistOutbox(attempts: StudyAttemptPayload[]) {
-  safeSet(OUTBOX_KEY, JSON.stringify(attempts))
-  pendingCount.value = attempts.length
+function loadSessionOutbox(): StudySessionFinishPayload[] {
+  try {
+    const raw = safeGet(SESSION_OUTBOX_KEY)
+    const parsed = raw ? JSON.parse(raw) : []
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
 }
 
-persistOutbox(loadOutbox())
+function refreshPendingCount() {
+  pendingCount.value = loadOutbox().length + loadSessionOutbox().length
+}
+
+function persistOutbox(attempts: StudyAttemptPayload[]) {
+  safeSet(OUTBOX_KEY, JSON.stringify(attempts))
+  refreshPendingCount()
+}
+
+function persistSessionOutbox(sessions: StudySessionFinishPayload[]) {
+  safeSet(SESSION_OUTBOX_KEY, JSON.stringify(sessions))
+  refreshPendingCount()
+}
+
+refreshPendingCount()
 
 // ─── Config ────────────────────────────────────────────────────────────────
 
@@ -143,7 +171,7 @@ export function isStudySyncConfigured(): boolean {
   return loadStudySyncConfig().baseUrl !== ''
 }
 
-/** Persistent device identifier (kept for future multi-device sync; not sent in the current contract) */
+/** Persistent device identifier used to distinguish Android/Web/Desktop attempt sources. */
 export function getDeviceId(): string {
   let deviceId = safeGet(DEVICE_KEY)
   if (!deviceId) {
@@ -200,6 +228,7 @@ export function recordStudyAttempt(session: PracticeSession, item: PracticeSessi
   enqueueAttempt({
     idempotencyKey: `${sessionKey}-${attemptId}`,
     sessionKey,
+    deviceId: getDeviceId(),
     questionKey: buildQuestionKey(q),
     sessionQuestionId: q.id,
     questionSnapshot: buildSnapshot(q),
@@ -218,6 +247,22 @@ export function recordStudyAttempt(session: PracticeSession, item: PracticeSessi
 // ─── Outbox ────────────────────────────────────────────────────────────────
 
 /** Upsert by idempotencyKey; drop oldest entries when the bound is exceeded */
+export function recordStudySessionFinish(session: PracticeSession) {
+  if (!session.sessionKey || session.finishedAt == null) return
+  const payload: StudySessionFinishPayload = {
+    sessionKey: session.sessionKey,
+    startedAt: session.startedAt,
+    finishedAt: session.finishedAt,
+  }
+  const outbox = loadSessionOutbox()
+  const index = outbox.findIndex(item => item.sessionKey === payload.sessionKey)
+  if (index >= 0) outbox[index] = payload
+  else outbox.push(payload)
+  persistSessionOutbox(outbox.slice(-MAX_OUTBOX_ENTRIES))
+  ensureOnlineListener()
+  triggerFlush()
+}
+
 export function enqueueAttempt(attempt: StudyAttemptPayload) {
   const outbox = loadOutbox()
   const existingIndex = outbox.findIndex(a => a.idempotencyKey === attempt.idempotencyKey)
@@ -259,6 +304,28 @@ async function postBatch(
       method: 'POST',
       headers: authHeaders(token),
       body: JSON.stringify({ attempts }),
+      signal: controller.signal,
+    })
+    return res.status
+  } catch {
+    return null
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+async function postSessionFinish(
+  baseUrl: string,
+  token: string,
+  payload: StudySessionFinishPayload,
+): Promise<number | null> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+  try {
+    const res = await fetch(joinUrl(baseUrl, 'api/study/sessions/finish'), {
+      method: 'POST',
+      headers: authHeaders(token),
+      body: JSON.stringify(payload),
       signal: controller.signal,
     })
     return res.status
@@ -314,11 +381,27 @@ async function doFlush(): Promise<FlushResult> {
         persistOutbox(current)
         sent += batch.length
       }
+
+      for (;;) {
+        const sessionOutbox = loadSessionOutbox()
+        if (sessionOutbox.length === 0) break
+        const payload = sessionOutbox[0]!
+        const status = await postSessionFinish(config.baseUrl, config.token, payload)
+        if (status === null || status < 200 || status >= 300) {
+          console.warn(`[studySync] session finish flush stopped: ${status === null ? 'network error' : `HTTP ${status}`}`)
+          break
+        }
+        const current = loadSessionOutbox().filter(item => !(
+          item.sessionKey === payload.sessionKey && item.finishedAt === payload.finishedAt
+        ))
+        persistSessionOutbox(current)
+        sent += 1
+      }
     } finally {
       syncing.value = false
     }
   }
-  const remaining = loadOutbox().length
+  const remaining = loadOutbox().length + loadSessionOutbox().length
   pendingCount.value = remaining
   return { ok: remaining === 0, sent, remaining }
 }

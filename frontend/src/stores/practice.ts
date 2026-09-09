@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import type { QuestionBank, PracticeSession, PracticeSessionItem, PracticeMode, MockExamConfig, Question, PracticeFilter } from '@exameow/shared'
-import { recordStudyAttempt } from '@/services/studySync'
+import { recordStudyAttempt, recordStudySessionFinish } from '@/services/studySync'
 import { analyzeCSV, analyzeExcel, parseWithMapping } from '@/utils/importParser'
 import type { ColumnMapping, ImportAnalysis } from '@/utils/importParser'
 import { usePracticeHistoryStore } from '@/stores/practiceHistory'
@@ -46,6 +46,7 @@ function saveSession(session: PracticeSession | null) {
 }
 
 function generateId(): string {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID()
   return Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8)
 }
 
@@ -375,8 +376,10 @@ export const usePracticeStore = defineStore('practice', () => {
 
   function finishSession() {
     if (!session.value) return
+    ensureSyncMeta()
     session.value.finishedAt = Date.now()
     saveSession(session.value)
+    recordStudySessionFinish(session.value)
   }
 
   function removeCurrentQuestion() {
@@ -384,8 +387,10 @@ export const usePracticeStore = defineStore('practice', () => {
     const idx = session.value.currentIndex
     session.value.questions.splice(idx, 1)
     if (session.value.questions.length === 0) {
+      ensureSyncMeta()
       session.value.finishedAt = Date.now()
       saveSession(session.value)
+      recordStudySessionFinish(session.value)
       return true
     }
     if (idx >= session.value.questions.length) {
