@@ -8,6 +8,7 @@ import {
   ChartBarIcon,
   ChevronRightIcon,
   Cog6ToothIcon,
+  CloudArrowDownIcon,
 } from '@heroicons/vue/24/outline'
 
 const router = useRouter()
@@ -16,6 +17,7 @@ const version = import.meta.env.VITE_APP_VERSION
 
 const entries = [
   { key: 'mineAIConfig', descKey: 'mineAIConfigDesc', path: '/mine/config', icon: CpuChipIcon },
+  { key: 'syncTitle', descKey: 'syncDesc', path: '/mine/study-sync', icon: CloudArrowDownIcon },
   { key: 'mineRecords', descKey: 'mineRecordsDesc', path: '/mine/records', icon: ChartBarIcon },
   { key: 'minePublished', descKey: 'minePublishedDesc', path: '/mine/published', icon: PaperAirplaneIcon },
   { key: 'mineJoined', descKey: 'mineJoinedDesc', path: '/mine/joined', icon: PencilSquareIcon },

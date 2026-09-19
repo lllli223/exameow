@@ -29,6 +29,7 @@ const emit = defineEmits<{
   (e: 'delete', id: string): void
   (e: 'import'): void
   (e: 'sync'): void
+  (e: 'configureSync'): void
   (e: 'manageWrong', bankId: string): void
 }>()
 
@@ -238,6 +239,14 @@ const hasExportMessage = computed(() => templateExportSuccess.value || templateE
         >
           <CloudArrowDownIcon class="w-4 h-4" />
           {{ props.syncing ? '...' : i18n.t('syncFlush') }}
+        </button>
+        <button
+          v-if="!props.syncEnabled"
+          class="btn-text text-sm"
+          @click="emit('configureSync')"
+        >
+          <CloudArrowDownIcon class="w-4 h-4" />
+          {{ i18n.t('syncTitle') }}
         </button>
         <button class="btn-text text-sm" :disabled="downloadingTemplate" @click="handleDownloadTemplate">
           <ArrowDownTrayIcon class="w-4 h-4" />

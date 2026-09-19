@@ -82,6 +82,12 @@ const router = createRouter({
       meta: { title: 'AI Config' },
     },
     {
+      path: '/mine/study-sync',
+      name: 'mine-study-sync',
+      component: () => import('@/views/StudySyncView.vue'),
+      meta: { title: 'Study Sync' },
+    },
+    {
       path: '/mine/settings',
       name: 'mine-settings',
       component: () => import('@/views/SettingsView.vue'),

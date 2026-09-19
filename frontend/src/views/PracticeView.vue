@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { useI18nStore } from '@/stores/i18n'
 import { usePracticeStore } from '@/stores/practice'
 import { useWrongQuestionsStore } from '@/stores/wrongQuestions'
@@ -38,6 +39,7 @@ import {
 } from '@heroicons/vue/24/outline'
 
 const i18n = useI18nStore()
+const router = useRouter()
 const practiceStore = usePracticeStore()
 const wrongStore = useWrongQuestionsStore()
 const configStore = useConfigStore()
@@ -771,6 +773,7 @@ function handleBack() {
         @delete="handleDelete"
         @import="showImportDialog = true"
         @sync="handleRemoteBankSync"
+        @configure-sync="router.push('/mine/study-sync')"
         @manage-wrong="handleManageWrong"
       />
     </template>
