@@ -8,6 +8,8 @@ the full specification.
 
 from __future__ import annotations
 
+import re
+
 SCHEMA_VERSION = 1
 
 # SGCC workflow exam types. short_answer is deliberately NOT allowed.
@@ -19,6 +21,8 @@ BANK_FIELDS = (
     "schemaVersion",
     "key",
     "name",
+    "version",
+    "metadata",
     "questions",
     "subject",
     "chapter",
@@ -42,6 +46,9 @@ QUESTION_FIELDS = (
 )
 
 MAX_KEY_LENGTH = 128
+MIN_KEY_LENGTH = 3
+KEY_PATTERN = re.compile(r"^[A-Za-z0-9._:-]+$")
+METADATA_FIELDS = ("exam", "outlineVersion", "subject")
 TRUE_FALSE_ANSWERS = ("true", "false")
 
 
@@ -67,9 +74,11 @@ def _check_identifier(errors, path, value, label):
     if not isinstance(value, str):
         _err(errors, path, "%s must be a string" % label)
         return
-    if value == "":
+    if not value.strip():
         _err(errors, path, "%s must not be empty" % label)
         return
+    if len(value) < MIN_KEY_LENGTH:
+        _err(errors, path, "%s must be at least %d characters" % (label, MIN_KEY_LENGTH))
     if len(value) > MAX_KEY_LENGTH:
         _err(errors, path, "%s must be at most %d characters (got %d)"
              % (label, MAX_KEY_LENGTH, len(value)))
@@ -79,14 +88,33 @@ def _check_identifier(errors, path, value, label):
         _err(errors, path, "%s must not contain '/' or '\\'" % label)
     if any(ord(ch) < 32 or ord(ch) == 127 for ch in value):
         _err(errors, path, "%s must not contain control characters" % label)
+    if not KEY_PATTERN.fullmatch(value):
+        _err(errors, path, "%s may contain only ASCII letters, digits, '.', '_', ':', or '-'" % label)
+
+
+def _check_metadata(errors, path, value):
+    if not isinstance(value, dict):
+        _err(errors, path, "metadata must be an object")
+        return
+    _check_unknown_fields(errors, path, value, METADATA_FIELDS)
+    for field in METADATA_FIELDS:
+        if field not in value:
+            _err(errors, path, "missing required metadata field: %s" % field)
+        else:
+            _check_text(errors, "%s.%s" % (path, field), value[field], field)
 
 
 def _check_tags(errors, path, value):
     if not isinstance(value, list):
         _err(errors, path, "tags must be a list of strings")
         return
+    seen = set()
     for index, tag in enumerate(value):
         _check_text(errors, "%s[%d]" % (path, index), tag, "tag")
+        if isinstance(tag, str) and tag.strip():
+            if tag in seen:
+                _err(errors, path, "duplicate tag %r; tags must be unique" % tag)
+            seen.add(tag)
 
 
 def _check_source_meta(errors, path, value):
@@ -147,20 +175,21 @@ def _check_choice_answer(errors, path, answer, option_count, multi):
                  % ("".join(invalid), allowed))
 
 
-def _check_duplicate_stable_keys(errors, questions):
-    seen = {}
-    for index, question in enumerate(questions):
-        if not isinstance(question, dict):
-            continue
-        stable_key = question.get("stableKey")
-        if isinstance(stable_key, str) and stable_key:
-            seen.setdefault(stable_key, []).append(index)
-    for stable_key, indices in seen.items():
-        if len(indices) > 1:
-            _err(errors, "questions",
-                 "duplicate stableKey %r in question(s) %s; stable keys must be "
-                 "unique within one bank"
-                 % (stable_key, ", ".join(str(i) for i in indices)))
+def _check_duplicate_question_keys(errors, questions):
+    for field, label in (("id", "id"), ("stableKey", "stableKey")):
+        seen = {}
+        for index, question in enumerate(questions):
+            if not isinstance(question, dict):
+                continue
+            value = question.get(field)
+            if isinstance(value, str) and value:
+                seen.setdefault(value, []).append(index)
+        for value, indices in seen.items():
+            if len(indices) > 1:
+                _err(errors, "questions",
+                     "duplicate %s %r in question(s) %s; %s values must be "
+                     "unique within one bank"
+                     % (label, value, ", ".join(str(i) for i in indices), label))
 
 
 def _validate_question(errors, index, question):
@@ -194,7 +223,7 @@ def _validate_question(errors, index, question):
     if not has_id and not has_stable_key:
         _err(errors, path, "missing required field: 'id' or 'stableKey' (at least one)")
     if has_id:
-        _check_text(errors, "%s.id" % path, question["id"], "id")
+        _check_identifier(errors, "%s.id" % path, question["id"], "id")
     if has_stable_key:
         _check_identifier(errors, "%s.stableKey" % path, question["stableKey"], "stableKey")
 
@@ -274,6 +303,18 @@ def validate_bank(data):
     else:
         _check_text(errors, "name", data["name"], "name")
 
+    if "version" not in data:
+        _err(errors, "(bank)", "missing required field: version")
+    else:
+        version = data["version"]
+        if isinstance(version, bool) or not isinstance(version, int) or version < 1:
+            _err(errors, "version", "version must be an integer >= 1")
+
+    if "metadata" not in data:
+        _err(errors, "(bank)", "missing required field: metadata")
+    else:
+        _check_metadata(errors, "metadata", data["metadata"])
+
     if "questions" not in data:
         _err(errors, "(bank)", "missing required field: questions")
     elif not isinstance(data["questions"], list):
@@ -281,7 +322,7 @@ def validate_bank(data):
     else:
         for index, question in enumerate(data["questions"]):
             _validate_question(errors, index, question)
-        _check_duplicate_stable_keys(errors, data["questions"])
+        _check_duplicate_question_keys(errors, data["questions"])
 
     if "subject" in data:
         _check_text(errors, "subject", data["subject"], "subject")

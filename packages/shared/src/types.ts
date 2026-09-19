@@ -44,7 +44,13 @@ export interface QuestionBank {
   name: string
   questions: Question[]
   createdAt: number
-  source: 'ai-generated' | 'csv-import' | 'xlsx-import'
+  source: 'ai-generated' | 'csv-import' | 'xlsx-import' | 'server-sync'
+  /** Server-side study-bank key when this bank came from study sync. */
+  remoteKey?: string
+  /** Last server updatedAt applied to this local copy. */
+  remoteUpdatedAt?: number
+  /** Server content hash used to skip unchanged bank downloads. */
+  remoteContentHash?: string
 }
 
 export type PracticeMode = 'sequential' | 'random' | 'mock' | 'wrong'
@@ -74,10 +80,16 @@ export interface PracticeSessionItem {
   flagged?: boolean
   /** Wall-clock time the attempt was first submitted */
   submittedAt?: number
+  /** Active time accumulated while this question was in view before submission. */
+  durationMs?: number
+  /** Current active timing segment; reset on reload so offline time is not counted. */
+  viewStartedAt?: number
 }
 
 export interface PracticeSession {
   bankId: string
+  /** Stable logical bank key used by study sync; survives local id changes. */
+  bankKey?: string
   mode: PracticeMode
   questions: PracticeSessionItem[]
   currentIndex: number

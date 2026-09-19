@@ -8,12 +8,12 @@ This folder is self-contained: no frontend, Rust, or Worker code is required or 
 
 | File | Purpose |
 |---|---|
-| `exameowctl.ps1` | Windows launcher: resolves env vars from User/Machine scopes, then runs the Python CLI |
+| `exameowctl.ps1` | Windows launcher: resolves env vars from User/Machine scopes, then runs the Python CLI |`n| `exameowctl.cmd` | CMD/PATH-friendly wrapper around `exameowctl.ps1` |
 | `exameowctl.py` | CLI entry point (stdlib only) |
 | `client.py` | HTTP client for `/api/study` (urllib, Bearer auth, exit-code mapping) |
 | `consumer.py` | Consumer-key derivation + filter normalization (feed/ack cursor namespaces) |
 | `schema.py` | Offline study-bank validation (schemaVersion 1) |
-| `example_bank.json` | Example bank exercising every schema rule |
+| `example_bank.json` | Example bank exercising every schema rule |`n| `../../schemas/stategrid-bank.schema.json` | Canonical schemaVersion 1 JSON Schema reference |
 | `tests/` | `unittest` suite: schema, consumer derivation, client helpers |
 
 ## Server-side requirement
@@ -57,16 +57,18 @@ Direct (non-Windows, or no wrapper): export `EXAMEOW_BASE_URL` and `EXAMEOW_TOKE
 | Command | What it does |
 |---|---|
 | `status` | `GET /api/study/health`; verifies reachability + credentials |
-| `feed [--consumer chatgpt] [--subject S] [--chapter C] [--after CURSOR] [--limit N] [--json]` | list unseen mistakes |
-| `ack <cursor> [--consumer chatgpt] [--subject S] [--chapter C] [--json]` | acknowledge mistakes up to a cursor |
+| `feed [--consumer chatgpt] [--subject S] [--chapter C] [--bank KEY] [--wrong-only] [--after CURSOR] [--limit N] [--json]` | list unseen wrong/flagged review events |
+| `ack <cursor> [--consumer chatgpt] [--subject S] [--chapter C] [--bank KEY] [--wrong-only] [--json]` | acknowledge the exact matching feed namespace up to a cursor |
 | `session latest [--json]` | latest practice session |
 | `question history <questionKey> [--limit N] [--json]` | mistake history for one question |
 | `bank validate <file> [--json]` | offline schema check (needs no env vars) |
 | `bank import <file> [--json]` | validate locally first, then upload |
 | `bank list [--json]` | list banks on the server |
-| `bank show <bankKey> [--json]` | fetch one bank |
+| `bank show <bankKey> [--json]` / `bank get <bankKey> [--json]` | fetch one bank |
 
 Every network command reads `EXAMEOW_BASE_URL`/`EXAMEOW_TOKEN` from the environment. `bank validate` is fully offline.
+
+Banks uploaded with `bank import` are centrally stored. The Web/mobile practice page discovers them through the study API and pulls only new or changed banks into its local-first bank list, using the server content hash to skip unchanged payloads.
 
 ## Consumer keys and ACK safety
 
@@ -76,6 +78,8 @@ The server tracks each feed's read cursor **per exact consumer key**. `feed` and
 key = <base consumer>                                  (default: chatgpt, override with --consumer)
 key += "/subject=<normalized subject>"                  (if --subject given)
 key += "/chapter=<normalized chapter>"                  (if --chapter given)
+key += "/bank=<bank key>"                                 (if --bank given)
+key += "/flagged=0"                                       (if --wrong-only)
 ```
 
 Normalization trims, collapses all whitespace (including full-width spaces) to single spaces, and casefolds, so `" 电工基础 "` and `"电工基础"` map to the same key.
@@ -86,11 +90,13 @@ Normalization trims, collapses all whitespace (including full-width spaces) to s
 | `--subject 电工基础` | `chatgpt/subject=电工基础` |
 | `--chapter 1` | `chatgpt/chapter=1` |
 | `--subject 电工基础 --chapter 1` | `chatgpt/subject=电工基础/chapter=1` |
-| `--consumer chatgpt/subject=电工基础` | used **verbatim** |
+| `--bank sgcc-iot` | `chatgpt/bank=sgcc-iot` |
+| `--wrong-only` | `chatgpt/flagged=0` |
+| `--consumer chatgpt/subject=电工基础` | namespace preserved; encoded filters are replayed |
 
-If `--consumer` already contains `subject=`/`chapter=` segments it counts as **fully qualified** and is sent as-is (its filters are not re-derived and no extra `subject`/`chapter` params are sent).
+If `--consumer` already contains `subject=`, `chapter=`, `bank=`, or `flagged=` segments it counts as **fully qualified**. The namespace stays verbatim and its encoded filters are replayed to the server.
 
-**ACK rule.** Always run `ack <cursor>` with the *same* `--consumer/--subject/--chapter` flags as the `feed` call that produced the cursor (or with the fully-qualified consumer shown by that feed). Consequences:
+**ACK rule.** Always run `ack <cursor>` with the *same* `--consumer/--subject/--chapter/--bank/--wrong-only` flags as the `feed` call that produced the cursor (or with the fully-qualified consumer shown by that feed). Consequences:
 
 - Filtered feeds use their own keys, so a filtered ack can never accidentally consume the unfiltered cursor, and vice versa.
 - But an ack run with *different* filters derives a different key, lands in a different namespace, and will not advance the feed you actually read - unseen mistakes there stay unseen.
@@ -103,18 +109,20 @@ Bank object:
 | Field | Required | Rules |
 |---|---|---|
 | `schemaVersion` | yes | must be exactly `1` |
-| `key` | yes | non-empty; no whitespace, `/`, `\`, or control characters; ≤128 chars |
+| `key` | yes | 3-128 chars; portable ASCII `[A-Za-z0-9._:-]` only |
 | `name` | yes | non-empty string |
+| `version` | yes | integer `>= 1`; increment when the logical bank content version changes |
+| `metadata` | yes | object with non-empty `exam`, `outlineVersion`, and `subject` strings |
 | `questions` | yes | list of question objects (may be empty) |
 | `subject`, `chapter` | no | non-empty strings |
-| `tags` | no | list of non-empty strings |
+| `tags` | no | list of non-empty, unique strings |
 | `sourceMeta` | no | free-form object |
 
 Question object:
 
 | Field | Required | Rules |
 |---|---|---|
-| `id` or `stableKey` | one of the two, at least | non-empty strings; `stableKey` uses the same charset rules as `key` |
+| `id` or `stableKey` | one of the two, at least | each must use the same 3-128 character portable-ASCII rules as `key`; each field must be unique within the bank |
 | `type` | yes | `single_choice`, `multi_choice`, `true_false`, `fill_blank` (SGCC workflow; `short_answer` is rejected) |
 | `stem` | yes | non-empty string |
 | `options` | choice types only | required for `single_choice`/`multi_choice`, forbidden otherwise; exactly 2-5 non-empty strings |
@@ -122,7 +130,7 @@ Question object:
 | `analysis` | yes | non-empty string |
 | `subject`, `chapter`, `knowledgePoint` | no | non-empty strings |
 | `difficulty` | no | `easy`, `medium`, `hard` |
-| `tags` | no | list of non-empty strings |
+| `tags` | no | list of non-empty, unique strings |
 | `sourceMeta` | no | free-form object |
 
 Answer rules:
@@ -132,7 +140,7 @@ Answer rules:
 - `true_false`: exactly `"true"` or `"false"`.
 - `fill_blank`: non-empty string.
 
-Stable keys must be unique within one bank (duplicates are rejected). They must be deterministic - derive them from content, not position, e.g. `sha256(stem + "|" + answer + "|" + analysis)` truncated to 12-16 hex chars, or a manually assigned ID that never changes if the question text is edited. `bank validate` cannot verify determinism, but the example bank and this rule keep namespaces stable across imports.
+Question IDs and stable keys must each be unique within one bank (duplicates are rejected). They must be deterministic - derive them from content, not position, e.g. `sha256(stem + "|" + answer + "|" + analysis)` truncated to 12-16 hex chars, or a manually assigned ID that never changes if the question text is edited. `bank validate` cannot verify determinism, but the example bank and this rule keep namespaces stable across imports.
 
 Unknown fields are rejected at both bank and question level to catch typos early. See `example_bank.json` for a complete bank (Chinese SGCC-style content, all four question types, one `id`-only question).
 
@@ -149,7 +157,7 @@ All requests: `Authorization: Bearer EXAMEOW_TOKEN`, `Accept: application/json`,
 | `question history` | `GET /api/study/questions/<questionKey>/history?limit=<n>` |
 | `bank import` | `POST /api/study/banks/import` with the validated bank JSON as body |
 | `bank list` | `GET /api/study/banks` |
-| `bank show` | `GET /api/study/banks/<bankKey>` |
+| `bank show` / `bank get` | `GET /api/study/banks/<bankKey>` |
 
 Server responses are parsed as JSON and passed through verbatim. A non-JSON body is wrapped as `{"raw": "..."}`. Human-mode output recognizes the server's `attempts` list and numeric `nextCursor` (plus a few compatibility field names) and otherwise pretty-prints the whole payload.
 

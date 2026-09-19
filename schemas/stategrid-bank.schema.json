@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://exameow.local/schemas/stategrid-bank.schema.json",
+  "title": "Exameow State Grid Study Bank",
+  "description": "Canonical schemaVersion 1 bank used by exameowctl and the self-hosted study-sync API.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "key", "name", "version", "metadata", "questions"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "key": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._:-]+$"
+    },
+    "name": { "type": "string", "minLength": 1 },
+    "version": { "type": "integer", "minimum": 1 },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["exam", "outlineVersion", "subject"],
+      "properties": {
+        "exam": { "type": "string", "minLength": 1 },
+        "outlineVersion": { "type": "string", "minLength": 1 },
+        "subject": { "type": "string", "minLength": 1 }
+      }
+    },
+    "subject": { "type": "string", "minLength": 1 },
+    "chapter": { "type": "string", "minLength": 1 },
+    "tags": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "sourceMeta": { "type": "object" },
+    "questions": {
+      "type": "array",
+      "maxItems": 5000,
+      "items": { "$ref": "#/$defs/question" }
+    }
+  },
+  "$defs": {
+    "question": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "stem", "answer", "analysis"],
+      "anyOf": [
+        { "required": ["id"] },
+        { "required": ["stableKey"] }
+      ],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "stableKey": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9._:-]+$"
+        },
+        "type": {
+          "enum": ["single_choice", "multi_choice", "true_false", "fill_blank"]
+        },
+        "stem": { "type": "string", "minLength": 1 },
+        "options": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 5,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "answer": { "type": "string", "minLength": 1 },
+        "analysis": { "type": "string", "minLength": 1 },
+        "subject": { "type": "string", "minLength": 1 },
+        "chapter": { "type": "string", "minLength": 1 },
+        "knowledgePoint": { "type": "string", "minLength": 1 },
+        "difficulty": { "enum": ["easy", "medium", "hard"] },
+        "tags": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "sourceMeta": { "type": "object" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "type": { "const": "single_choice" } }, "required": ["type"] },
+          "then": {
+            "required": ["options"],
+            "properties": { "answer": { "pattern": "^[A-E]$" } }
+          }
+        },
+        {
+          "if": { "properties": { "type": { "const": "multi_choice" } }, "required": ["type"] },
+          "then": {
+            "required": ["options"],
+            "properties": { "answer": { "pattern": "^[A-E]{2,5}$" } }
+          }
+        },
+        {
+          "if": { "properties": { "type": { "const": "true_false" } }, "required": ["type"] },
+          "then": {
+            "not": { "required": ["options"] },
+            "properties": { "answer": { "enum": ["true", "false"] } }
+          }
+        },
+        {
+          "if": { "properties": { "type": { "const": "fill_blank" } }, "required": ["type"] },
+          "then": { "not": { "required": ["options"] } }
+        }
+      ]
+    }
+  }
+}

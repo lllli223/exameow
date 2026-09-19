@@ -1,7 +1,13 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import type { QuestionBank, PracticeSession, PracticeSessionItem, PracticeMode, MockExamConfig, Question, PracticeFilter } from '@exameow/shared'
-import { recordStudyAttempt, recordStudySessionFinish } from '@/services/studySync'
+import {
+  recordStudyAttempt,
+  recordStudySessionFinish,
+  listRemoteStudyBanks,
+  getRemoteStudyBank,
+  type StudyBankEnvelope,
+} from '@/services/studySync'
 import { analyzeCSV, analyzeExcel, parseWithMapping } from '@/utils/importParser'
 import type { ColumnMapping, ImportAnalysis } from '@/utils/importParser'
 import { usePracticeHistoryStore } from '@/stores/practiceHistory'
@@ -28,7 +34,13 @@ function saveBanks(banks: QuestionBank[]) {
 function loadSession(): PracticeSession | null {
   try {
     const raw = localStorage.getItem(SESSION_KEY)
-    return raw ? JSON.parse(raw) : null
+    const parsed: PracticeSession | null = raw ? JSON.parse(raw) : null
+    if (parsed && parsed.finishedAt == null) {
+      // A restored session is only visible as a resume card initially. Do not
+      // count time until the user explicitly resumes the practice view.
+      for (const item of parsed.questions) item.viewStartedAt = undefined
+    }
+    return parsed
   } catch {
     return null
   }
@@ -48,6 +60,17 @@ function saveSession(session: PracticeSession | null) {
 function generateId(): string {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID()
   return Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8)
+}
+
+function stopItemTimer(item: PracticeSessionItem | undefined, now = Date.now()) {
+  if (!item || item.submitted || item.viewStartedAt == null) return
+  item.durationMs = Math.max(0, item.durationMs ?? 0) + Math.max(0, now - item.viewStartedAt)
+  item.viewStartedAt = undefined
+}
+
+function startItemTimer(item: PracticeSessionItem | undefined, now = Date.now()) {
+  if (!item || item.submitted || item.viewStartedAt != null) return
+  item.viewStartedAt = now
 }
 
 function shuffleArray<T>(arr: T[]): T[] {
@@ -108,6 +131,47 @@ function generateMockQuestions(bank: QuestionBank, config: MockExamConfig): Ques
     selected.push(...shuffled.slice(0, count))
   }
   return shuffleArray(selected)
+}
+
+export interface StudyBankSyncResult {
+  total: number
+  added: number
+  updated: number
+  unchanged: number
+}
+
+function remoteBankToLocal(envelope: StudyBankEnvelope): QuestionBank {
+  const remote = envelope.bank
+  const questions = remote.questions.map((q, index) => {
+    const originalId = q.id || q.stableKey || `question-${index + 1}`
+    return {
+      ...q,
+      id: originalId,
+      stableKey: q.stableKey,
+      options: q.options ?? [],
+      subject: q.subject ?? remote.subject ?? remote.metadata.subject,
+      chapter: q.chapter ?? remote.chapter,
+      tags: q.tags ?? remote.tags,
+      sourceMeta: {
+        ...(remote.sourceMeta ?? {}),
+        ...(q.sourceMeta ?? {}),
+        remoteBankKey: envelope.bankKey,
+        remoteBankVersion: remote.version,
+        remoteExam: remote.metadata.exam,
+        remoteOutlineVersion: remote.metadata.outlineVersion,
+      },
+    }
+  })
+  return {
+    id: `study-bank:${envelope.bankKey}`,
+    name: remote.name || envelope.name,
+    questions,
+    createdAt: envelope.createdAt || envelope.updatedAt || Date.now(),
+    source: 'server-sync',
+    remoteKey: envelope.bankKey,
+    remoteUpdatedAt: envelope.updatedAt,
+    remoteContentHash: envelope.contentHash,
+  }
 }
 
 export const usePracticeStore = defineStore('practice', () => {
@@ -207,20 +271,24 @@ export const usePracticeStore = defineStore('practice', () => {
 
     if (questions.length === 0) return false
 
+    const startedAt = Date.now()
     const sessionQuestions: PracticeSessionItem[] = questions.map((q, i) => ({
       question: { ...q, id: `${q.id}-s${i}` },
       userAnswer: null as string | null,
       isCorrect: null as boolean | null,
       submitted: false,
       attemptId: generateId(),
+      durationMs: 0,
+      viewStartedAt: i === 0 ? startedAt : undefined,
     }))
 
     session.value = {
       bankId,
+      bankKey: bank.remoteKey ?? bank.id,
       mode,
       questions: sessionQuestions,
       currentIndex: 0,
-      startedAt: Date.now(),
+      startedAt,
       finishedAt: null,
       mockConfig: mode === 'mock' ? normalizedMockConfig : undefined,
       filter: mode === 'wrong' ? undefined : filter,
@@ -235,6 +303,13 @@ export const usePracticeStore = defineStore('practice', () => {
     const item = session.value.questions[session.value.currentIndex]
     return item ? item.submitted === true : false
   })
+
+  function resumeCurrentTimer() {
+    const s = session.value
+    if (!s || s.finishedAt != null) return
+    startItemTimer(s.questions[s.currentIndex])
+    saveSession(s)
+  }
 
   function setAnswer(answer: string | null) {
     if (!session.value) return
@@ -259,8 +334,10 @@ export const usePracticeStore = defineStore('practice', () => {
     const item = s.questions[s.currentIndex]
     if (!item) return null
     item.userAnswer = answer
+    const submittedAt = Date.now()
+    stopItemTimer(item, submittedAt)
     item.submitted = true
-    if (!item.submittedAt) item.submittedAt = Date.now()
+    if (!item.submittedAt) item.submittedAt = submittedAt
 
     const q = item.question
     if (q.type === 'single_choice' || q.type === 'multi_choice') {
@@ -290,8 +367,10 @@ export const usePracticeStore = defineStore('practice', () => {
     const item = s.questions[s.currentIndex]
     if (!item) return
     item.isCorrect = isCorrect
+    const submittedAt = Date.now()
+    stopItemTimer(item, submittedAt)
     item.submitted = true
-    if (!item.submittedAt) item.submittedAt = Date.now()
+    if (!item.submittedAt) item.submittedAt = submittedAt
     usePracticeHistoryStore().record(item.question.type, isCorrect)
     ensureSyncMeta()
     recordStudyAttempt(s, item)
@@ -302,9 +381,17 @@ export const usePracticeStore = defineStore('practice', () => {
   function ensureSyncMeta() {
     const s = session.value
     if (!s) return
+    const bank = getBank(s.bankId)
     if (!s.sessionKey) s.sessionKey = generateId()
+    if (!s.bankKey) s.bankKey = bank?.remoteKey ?? s.bankId
     for (const item of s.questions) {
       if (!item.attemptId) item.attemptId = generateId()
+      if (item.flagged == null) item.flagged = false
+      if (!item.question.stableKey && bank) {
+        const originalId = item.question.id.replace(/-s\d+$/, '')
+        const original = bank.questions.find(q => q.id === originalId)
+        if (original?.stableKey) item.question.stableKey = original.stableKey
+      }
     }
   }
 
@@ -353,7 +440,10 @@ export const usePracticeStore = defineStore('practice', () => {
   function nextQuestion() {
     if (!session.value) return
     if (session.value.currentIndex < session.value.questions.length - 1) {
+      const now = Date.now()
+      stopItemTimer(session.value.questions[session.value.currentIndex], now)
       session.value.currentIndex++
+      startItemTimer(session.value.questions[session.value.currentIndex], now)
       saveSession(session.value)
     }
   }
@@ -361,15 +451,21 @@ export const usePracticeStore = defineStore('practice', () => {
   function prevQuestion() {
     if (!session.value) return
     if (session.value.currentIndex > 0) {
+      const now = Date.now()
+      stopItemTimer(session.value.questions[session.value.currentIndex], now)
       session.value.currentIndex--
+      startItemTimer(session.value.questions[session.value.currentIndex], now)
       saveSession(session.value)
     }
   }
 
   function goToQuestion(index: number) {
     if (!session.value) return
-    if (index >= 0 && index < session.value.questions.length) {
+    if (index >= 0 && index < session.value.questions.length && index !== session.value.currentIndex) {
+      const now = Date.now()
+      stopItemTimer(session.value.questions[session.value.currentIndex], now)
       session.value.currentIndex = index
+      startItemTimer(session.value.questions[session.value.currentIndex], now)
       saveSession(session.value)
     }
   }
@@ -377,7 +473,9 @@ export const usePracticeStore = defineStore('practice', () => {
   function finishSession() {
     if (!session.value) return
     ensureSyncMeta()
-    session.value.finishedAt = Date.now()
+    const finishedAt = Date.now()
+    stopItemTimer(session.value.questions[session.value.currentIndex], finishedAt)
+    session.value.finishedAt = finishedAt
     saveSession(session.value)
     recordStudySessionFinish(session.value)
   }
@@ -385,6 +483,8 @@ export const usePracticeStore = defineStore('practice', () => {
   function removeCurrentQuestion() {
     if (!session.value) return
     const idx = session.value.currentIndex
+    const now = Date.now()
+    stopItemTimer(session.value.questions[idx], now)
     session.value.questions.splice(idx, 1)
     if (session.value.questions.length === 0) {
       ensureSyncMeta()
@@ -396,6 +496,7 @@ export const usePracticeStore = defineStore('practice', () => {
     if (idx >= session.value.questions.length) {
       session.value.currentIndex = session.value.questions.length - 1
     }
+    startItemTimer(session.value.questions[session.value.currentIndex], now)
     saveSession(session.value)
     return false
   }
@@ -490,6 +591,50 @@ export const usePracticeStore = defineStore('practice', () => {
     importAnalysis.value = null
   }
 
+  async function syncStudyBanks(): Promise<StudyBankSyncResult> {
+    const summaries = await listRemoteStudyBanks()
+    const snapshot = [...banks.value]
+    const downloaded: QuestionBank[] = []
+    let added = 0
+    let updated = 0
+    let unchanged = 0
+
+    for (const summary of summaries) {
+      const existing = snapshot.find(
+        bank => bank.source === 'server-sync' && bank.remoteKey === summary.bankKey,
+      )
+      const sameHash = existing?.remoteContentHash && summary.contentHash
+        ? existing.remoteContentHash === summary.contentHash
+        : false
+      if (existing && (sameHash || existing.remoteUpdatedAt === summary.updatedAt)) {
+        unchanged++
+        continue
+      }
+
+      const envelope = await getRemoteStudyBank(summary.bankKey)
+      downloaded.push(remoteBankToLocal(envelope))
+      if (existing) updated++
+      else added++
+    }
+
+    // Commit only after every required download succeeded. Merge into the
+    // latest local list so a user import created while network I/O was in
+    // flight cannot be overwritten by an older snapshot.
+    if (downloaded.length > 0) {
+      const merged = [...banks.value]
+      for (const localBank of downloaded) {
+        const index = merged.findIndex(
+          bank => bank.source === 'server-sync' && bank.remoteKey === localBank.remoteKey,
+        )
+        if (index >= 0) merged[index] = localBank
+        else merged.push(localBank)
+      }
+      banks.value = merged
+      saveBanks(banks.value)
+    }
+    return { total: summaries.length, added, updated, unchanged }
+  }
+
   return {
     banks,
     session,
@@ -512,6 +657,7 @@ export const usePracticeStore = defineStore('practice', () => {
     getBank,
     saveGeneratedAsBank,
     startSession,
+    resumeCurrentTimer,
     setAnswer,
     submitAnswer,
     selfCheck,
@@ -531,5 +677,6 @@ export const usePracticeStore = defineStore('practice', () => {
     importAnalysis,
     confirmImport,
     cancelImport,
+    syncStudyBanks,
   }
 })

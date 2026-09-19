@@ -13,18 +13,22 @@ import {
   ExclamationTriangleIcon,
   CheckCircleIcon,
   ShareIcon,
+  CloudArrowDownIcon,
 } from '@heroicons/vue/24/outline'
 import { isAndroid } from '@/utils/platform'
 
 const props = defineProps<{
   banks: QuestionBank[]
   selectedId: string | null
+  syncing?: boolean
+  syncEnabled?: boolean
 }>()
 
 const emit = defineEmits<{
   (e: 'select', id: string): void
   (e: 'delete', id: string): void
   (e: 'import'): void
+  (e: 'sync'): void
   (e: 'manageWrong', bankId: string): void
 }>()
 
@@ -91,6 +95,7 @@ async function handleExportBank(bank: QuestionBank, format: BankExportFormat) {
 
 const sourceLabel = (source: string): string => {
   if (source === 'ai-generated') return i18n.t('practiceSourceAI')
+  if (source === 'server-sync') return i18n.t('syncTitle')
   return i18n.t('practiceSourceImport')
 }
 
@@ -220,11 +225,20 @@ const hasExportMessage = computed(() => templateExportSuccess.value || templateE
 
 <template>
   <div class="space-y-3">
-    <div class="flex items-center justify-between">
+    <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
       <h3 class="text-title-sm" :style="{ color: 'rgb(var(--md-on-surface))' }">
         {{ i18n.t('practiceSelectBank') }}
       </h3>
-      <div class="flex items-center gap-2">
+      <div class="flex flex-wrap items-center gap-2">
+        <button
+          v-if="props.syncEnabled"
+          class="btn-text text-sm"
+          :disabled="props.syncing"
+          @click="emit('sync')"
+        >
+          <CloudArrowDownIcon class="w-4 h-4" />
+          {{ props.syncing ? '...' : i18n.t('syncFlush') }}
+        </button>
         <button class="btn-text text-sm" :disabled="downloadingTemplate" @click="handleDownloadTemplate">
           <ArrowDownTrayIcon class="w-4 h-4" />
           {{ i18n.t('practiceDownloadTemplate') }}

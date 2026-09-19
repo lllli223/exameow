@@ -1,7 +1,11 @@
+import os
+import sys
 import unittest
 from unittest.mock import patch
 
-import exameowctl
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import exameowctl  # noqa: E402
 
 
 class FeedContractTest(unittest.TestCase):
@@ -25,6 +29,21 @@ class FeedContractTest(unittest.TestCase):
         args = parser.parse_args(["feed", "--after", "9", "--json"])
         self.assertEqual(args.after, 9)
         self.assertIsInstance(args.after, int)
+
+    def test_bank_and_wrong_only_filters_parse_for_feed_and_ack(self):
+        parser = exameowctl.build_parser()
+        feed = parser.parse_args(["feed", "--bank", "sgcc-iot", "--wrong-only"])
+        ack = parser.parse_args(["ack", "7", "--bank", "sgcc-iot", "--wrong-only"])
+        self.assertEqual(feed.bank, "sgcc-iot")
+        self.assertTrue(feed.wrong_only)
+        self.assertEqual(ack.bank, "sgcc-iot")
+        self.assertTrue(ack.wrong_only)
+
+    def test_bank_get_alias_uses_show_handler(self):
+        parser = exameowctl.build_parser()
+        args = parser.parse_args(["bank", "get", "sgcc-iot", "--json"])
+        self.assertEqual(args.bankKey, "sgcc-iot")
+        self.assertIs(args.func, exameowctl.cmd_bank_show)
 
 
 if __name__ == "__main__":

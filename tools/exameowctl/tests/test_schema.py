@@ -35,6 +35,8 @@ def make_bank(**overrides):
         "schemaVersion": 1,
         "key": "bank-1",
         "name": "Bank One",
+        "version": 1,
+        "metadata": {"exam": "国家电网计算机类", "outlineVersion": "2026", "subject": "信息新技术"},
         "questions": [make_question()],
     }
     bank.update(overrides)
@@ -100,6 +102,25 @@ class BankLevelTest(SchemaTestCase):
         self.assert_invalid(make_bank(schemaVersion="1"), "must be the integer")
         self.assert_invalid(make_bank(schemaVersion=True), "must be the integer")
 
+    def test_content_version_and_metadata_are_required(self):
+        bank = make_bank()
+        bank.pop("version")
+        self.assert_invalid(bank, "missing required field: version")
+        self.assert_invalid(make_bank(version=0), "integer >= 1")
+        self.assert_invalid(make_bank(version=True), "integer >= 1")
+
+        bank = make_bank()
+        bank.pop("metadata")
+        self.assert_invalid(bank, "missing required field: metadata")
+        self.assert_invalid(make_bank(metadata=[]), "metadata must be an object")
+        self.assert_invalid(make_bank(metadata={"exam": "国家电网计算机类", "outlineVersion": "2026"}), "metadata field: subject")
+        self.assert_invalid(make_bank(metadata={"exam": "", "outlineVersion": "2026", "subject": "信息新技术"}), "must not be empty")
+
+    def test_machine_keys_use_portable_ascii_charset(self):
+        self.assert_invalid(make_bank(key="ab"), "at least 3")
+        self.assert_invalid(make_bank(key="国网-key"), "ASCII letters")
+        self.assert_valid(make_bank(key="sgcc.iot:v1_test"))
+
     def test_invalid_bank_keys(self):
         self.assert_invalid(make_bank(key=""), "bank key must not be empty")
         self.assert_invalid(make_bank(key="my bank"), "must not contain whitespace")
@@ -117,6 +138,9 @@ class BankLevelTest(SchemaTestCase):
         self.assert_invalid(make_bank(tags="not-a-list"), "tags must be a list of strings")
         self.assert_invalid(make_bank(tags=["ok", ""]), "must not be empty")
         self.assert_invalid(make_bank(sourceMeta=[]), "sourceMeta must be an object")
+
+    def test_duplicate_bank_tags_rejected(self):
+        self.assert_invalid(make_bank(tags=["sgcc", "sgcc"]), "duplicate tag")
 
 
 class QuestionIdentityTest(SchemaTestCase):
@@ -160,6 +184,15 @@ class QuestionIdentityTest(SchemaTestCase):
             make_question(stableKey="k-2", stem="Other?", options=["A", "B"], answer="B"),
         ])
         self.assert_valid(bank)
+
+    def test_duplicate_ids_rejected_even_with_unique_stable_keys(self):
+        bank = make_bank(questions=[
+            make_question(id="dup-id", stableKey="k-1"),
+            make_question(id="dup-id", stableKey="k-2", stem="Other?",
+                          options=["A", "B"], answer="B"),
+        ])
+        self.assert_invalid(bank, "duplicate id")
+
 
 
 class QuestionTypeTest(SchemaTestCase):
@@ -320,6 +353,11 @@ class QuestionTextFieldsTest(SchemaTestCase):
                             "tag must be a string")
         self.assert_invalid(make_bank(questions=[make_question(sourceMeta="x")]),
                             "sourceMeta must be an object")
+
+    def test_duplicate_question_tags_rejected(self):
+        self.assert_invalid(
+            make_bank(questions=[make_question(tags=["tree", "tree"])]),
+            "duplicate tag")
 
     def test_unknown_question_field(self):
         self.assert_invalid(make_bank(questions=[make_question(hint="why")]),

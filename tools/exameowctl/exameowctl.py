@@ -163,12 +163,18 @@ def _ack_hint(args):
         parts.append('--subject "%s"' % args.subject)
     if args.chapter:
         parts.append('--chapter "%s"' % args.chapter)
+    if args.bank:
+        parts.append('--bank "%s"' % args.bank)
+    if args.wrong_only:
+        parts.append('--wrong-only')
     return (" " + " ".join(parts)) if parts else ""
 
 
 def cmd_feed(args):
     config = load_config()
-    params = consumer.derive_feed_params(args.consumer, args.subject, args.chapter)
+    params = consumer.derive_feed_params(
+        args.consumer, args.subject, args.chapter, args.bank, not args.wrong_only
+    )
     query = dict(params)
     if args.after:
         query["after"] = args.after
@@ -195,7 +201,9 @@ def cmd_feed(args):
 
 def cmd_ack(args):
     config = load_config()
-    params = consumer.derive_feed_params(args.consumer, args.subject, args.chapter)
+    params = consumer.derive_feed_params(
+        args.consumer, args.subject, args.chapter, args.bank, not args.wrong_only
+    )
     body = dict(params)
     body["cursor"] = args.cursor
     _, payload = request_json(config, "POST", ["feed", "ack"], body=body)
@@ -377,6 +385,10 @@ def _add_consumer_filters(parser, with_ack_warning=False):
                         help="subject filter; extends the consumer key")
     parser.add_argument("--chapter", default=None, metavar="TEXT",
                         help="chapter filter; extends the consumer key")
+    parser.add_argument("--bank", default=None, metavar="BANK_KEY",
+                        help="study-bank key filter; extends the consumer key")
+    parser.add_argument("--wrong-only", action="store_true",
+                        help="exclude flagged-only correct attempts; uses its own cursor namespace")
 
 
 def build_parser():
@@ -451,6 +463,11 @@ def build_parser():
     bp.set_defaults(func=cmd_bank_list)
 
     bp = bank_sub.add_parser("show", help="show one bank from the server")
+    bp.add_argument("bankKey", help="bank key")
+    add_json(bp)
+    bp.set_defaults(func=cmd_bank_show)
+
+    bp = bank_sub.add_parser("get", help="alias for 'bank show'")
     bp.add_argument("bankKey", help="bank key")
     add_json(bp)
     bp.set_defaults(func=cmd_bank_show)

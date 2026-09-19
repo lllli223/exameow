@@ -26,7 +26,7 @@ const MAX_BATCH_ATTEMPTS: usize = 500;
 const MAX_BODY_BYTES: usize = 12 * 1024 * 1024;
 const DEFAULT_PAGE_LIMIT: i64 = 100;
 const MAX_PAGE_LIMIT: i64 = 500;
-const MAX_KEY_LEN: usize = 256;
+const MAX_KEY_LEN: usize = 512;
 const MAX_CONSUMER_LEN: usize = 128;
 const MAX_TAG_LEN: usize = 256;
 const MAX_ANSWER_LEN: usize = 32 * 1024;
@@ -79,16 +79,20 @@ pub fn init_tables(conn: &Connection) -> Result<(), String> {
           idempotency_key TEXT NOT NULL UNIQUE,
           session_key TEXT NOT NULL,
           device_id TEXT NOT NULL DEFAULT '',
+          bank_key TEXT NOT NULL DEFAULT '',
           question_key TEXT NOT NULL,
+          original_question_id TEXT NOT NULL DEFAULT '',
           session_question_id TEXT NOT NULL DEFAULT '',
           question_snapshot TEXT NOT NULL DEFAULT '',
           user_answer TEXT NOT NULL DEFAULT '',
+          user_answer_is_null INTEGER NOT NULL DEFAULT 0,
           correct_answer TEXT NOT NULL DEFAULT '',
           is_correct INTEGER,
           flagged INTEGER NOT NULL DEFAULT 0,
           subject TEXT,
           chapter TEXT,
           knowledge_point TEXT,
+          duration_ms INTEGER NOT NULL DEFAULT 0,
           submitted_at INTEGER NOT NULL,
           created_at INTEGER NOT NULL
         );
@@ -116,6 +120,7 @@ pub fn init_tables(conn: &Connection) -> Result<(), String> {
           bank_key TEXT PRIMARY KEY,
           name TEXT NOT NULL,
           payload TEXT NOT NULL,
+          content_hash TEXT NOT NULL DEFAULT '',
           question_count INTEGER NOT NULL DEFAULT 0,
           created_at INTEGER NOT NULL,
           updated_at INTEGER NOT NULL
@@ -125,7 +130,9 @@ pub fn init_tables(conn: &Connection) -> Result<(), String> {
 
     // Forward-compatible migration for databases created by early study-sync builds.
     let has_device_id = {
-        let mut stmt = conn.prepare("PRAGMA table_info(study_attempts)").map_err(|e| e.to_string())?;
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(study_attempts)")
+            .map_err(|e| e.to_string())?;
         let cols = stmt
             .query_map([], |row| row.get::<_, String>(1))
             .map_err(|e| e.to_string())?;
@@ -133,8 +140,109 @@ pub fn init_tables(conn: &Connection) -> Result<(), String> {
         found
     };
     if !has_device_id {
-        conn.execute("ALTER TABLE study_attempts ADD COLUMN device_id TEXT NOT NULL DEFAULT ''", [])
+        conn.execute(
+            "ALTER TABLE study_attempts ADD COLUMN device_id TEXT NOT NULL DEFAULT ''",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+
+    let has_bank_key = {
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(study_attempts)")
             .map_err(|e| e.to_string())?;
+        let cols = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .map_err(|e| e.to_string())?;
+        let found = cols.filter_map(Result::ok).any(|name| name == "bank_key");
+        found
+    };
+    if !has_bank_key {
+        conn.execute(
+            "ALTER TABLE study_attempts ADD COLUMN bank_key TEXT NOT NULL DEFAULT ''",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+
+    let has_duration_ms = {
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(study_attempts)")
+            .map_err(|e| e.to_string())?;
+        let cols = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .map_err(|e| e.to_string())?;
+        let found = cols
+            .filter_map(Result::ok)
+            .any(|name| name == "duration_ms");
+        found
+    };
+    if !has_duration_ms {
+        conn.execute(
+            "ALTER TABLE study_attempts ADD COLUMN duration_ms INTEGER NOT NULL DEFAULT 0",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+
+    let has_original_question_id = {
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(study_attempts)")
+            .map_err(|e| e.to_string())?;
+        let cols = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .map_err(|e| e.to_string())?;
+        let found = cols
+            .filter_map(Result::ok)
+            .any(|name| name == "original_question_id");
+        found
+    };
+    if !has_original_question_id {
+        conn.execute(
+            "ALTER TABLE study_attempts ADD COLUMN original_question_id TEXT NOT NULL DEFAULT ''",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+
+    let has_user_answer_is_null = {
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(study_attempts)")
+            .map_err(|e| e.to_string())?;
+        let cols = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .map_err(|e| e.to_string())?;
+        let found = cols
+            .filter_map(Result::ok)
+            .any(|name| name == "user_answer_is_null");
+        found
+    };
+    if !has_user_answer_is_null {
+        conn.execute(
+            "ALTER TABLE study_attempts ADD COLUMN user_answer_is_null INTEGER NOT NULL DEFAULT 0",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+
+    let has_bank_content_hash = {
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(study_banks)")
+            .map_err(|e| e.to_string())?;
+        let cols = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .map_err(|e| e.to_string())?;
+        let found = cols
+            .filter_map(Result::ok)
+            .any(|name| name == "content_hash");
+        found
+    };
+    if !has_bank_content_hash {
+        conn.execute(
+            "ALTER TABLE study_banks ADD COLUMN content_hash TEXT NOT NULL DEFAULT ''",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
     }
 
     if !had_review_events {
@@ -201,7 +309,9 @@ pub async fn study_auth(State(state): State<Arc<AppState>>, req: Request, next: 
 pub fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
     Router::new()
         .route("/attempts/batch", post(attempts_batch_handler))
+        .route("/attempts/{id}/flag", post(attempt_flag_handler))
         .route("/sessions/finish", post(sessions_finish_handler))
+        .route("/sessions/{session_key}/finish", post(sessions_finish_path_handler))
         .route("/sessions/latest", get(sessions_latest_handler))
         .route("/feed", get(feed_handler))
         .route("/feed/ack", post(feed_ack_handler))
@@ -210,9 +320,10 @@ pub fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
             get(question_history_handler),
         )
         .route("/banks/import", post(banks_import_handler))
-        .route("/banks", get(banks_list_handler))
+        .route("/banks", get(banks_list_handler).post(banks_import_handler))
         .route("/banks/{bank_key}", get(banks_get_handler))
         .route("/health", get(health_handler))
+        .route("/status", get(health_handler))
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .layer(from_fn_with_state(state, study_auth))
 }
@@ -229,8 +340,12 @@ pub struct AttemptInput {
     pub session_key: Option<String>,
     #[serde(rename = "deviceId")]
     pub device_id: Option<String>,
+    #[serde(rename = "bankKey")]
+    pub bank_key: Option<String>,
     #[serde(rename = "questionKey")]
     pub question_key: Option<String>,
+    #[serde(rename = "originalQuestionId")]
+    pub original_question_id: Option<String>,
     #[serde(rename = "sessionQuestionId")]
     pub session_question_id: Option<String>,
     #[serde(rename = "questionSnapshot")]
@@ -246,6 +361,8 @@ pub struct AttemptInput {
     pub chapter: Option<String>,
     #[serde(rename = "knowledgePoint")]
     pub knowledge_point: Option<String>,
+    #[serde(rename = "durationMs")]
+    pub duration_ms: Option<i64>,
     #[serde(rename = "submittedAt")]
     pub submitted_at: Option<i64>,
 }
@@ -255,16 +372,19 @@ pub struct AttemptRow {
     pub idempotency_key: String,
     pub session_key: String,
     pub device_id: String,
+    pub bank_key: String,
     pub question_key: String,
+    pub original_question_id: String,
     pub session_question_id: String,
     pub question_snapshot: String,
-    pub user_answer: String,
+    pub user_answer: Option<String>,
     pub correct_answer: String,
     pub is_correct: Option<bool>,
     pub flagged: bool,
     pub subject: Option<String>,
     pub chapter: Option<String>,
     pub knowledge_point: Option<String>,
+    pub duration_ms: i64,
     pub submitted_at: i64,
     pub submitted_at_explicit: bool,
 }
@@ -278,14 +398,18 @@ pub struct AttemptOut {
     pub session_key: String,
     #[serde(rename = "deviceId")]
     pub device_id: String,
+    #[serde(rename = "bankKey")]
+    pub bank_key: String,
     #[serde(rename = "questionKey")]
     pub question_key: String,
+    #[serde(rename = "originalQuestionId")]
+    pub original_question_id: String,
     #[serde(rename = "sessionQuestionId")]
     pub session_question_id: String,
     #[serde(rename = "questionSnapshot")]
     pub question_snapshot: serde_json::Value,
     #[serde(rename = "userAnswer")]
-    pub user_answer: String,
+    pub user_answer: Option<String>,
     #[serde(rename = "correctAnswer")]
     pub correct_answer: String,
     #[serde(rename = "isCorrect")]
@@ -295,51 +419,66 @@ pub struct AttemptOut {
     pub chapter: Option<String>,
     #[serde(rename = "knowledgePoint")]
     pub knowledge_point: Option<String>,
+    #[serde(rename = "durationMs")]
+    pub duration_ms: i64,
     #[serde(rename = "submittedAt")]
     pub submitted_at: i64,
     #[serde(rename = "createdAt")]
     pub created_at: i64,
     #[serde(rename = "feedSeq", skip_serializing_if = "Option::is_none")]
     pub feed_seq: Option<i64>,
+    #[serde(rename = "wrongCount", skip_serializing_if = "Option::is_none")]
+    pub wrong_count: Option<i64>,
+    #[serde(rename = "attemptCount", skip_serializing_if = "Option::is_none")]
+    pub attempt_count: Option<i64>,
     #[serde(skip)]
     pub snapshot_raw: String,
 }
 
-const ATTEMPT_COLUMNS: &str = "seq, idempotency_key, session_key, device_id, question_key, session_question_id, question_snapshot, user_answer, correct_answer, is_correct, flagged, subject, chapter, knowledge_point, submitted_at, created_at";
-const ATTEMPT_COLUMNS_A: &str = "a.seq, a.idempotency_key, a.session_key, a.device_id, a.question_key, a.session_question_id, a.question_snapshot, a.user_answer, a.correct_answer, a.is_correct, a.flagged, a.subject, a.chapter, a.knowledge_point, a.submitted_at, a.created_at";
+const ATTEMPT_COLUMNS: &str = "seq, idempotency_key, session_key, device_id, bank_key, question_key, original_question_id, session_question_id, question_snapshot, user_answer, user_answer_is_null, correct_answer, is_correct, flagged, subject, chapter, knowledge_point, duration_ms, submitted_at, created_at";
+const ATTEMPT_COLUMNS_A: &str = "a.seq, a.idempotency_key, a.session_key, a.device_id, a.bank_key, a.question_key, a.original_question_id, a.session_question_id, a.question_snapshot, a.user_answer, a.user_answer_is_null, a.correct_answer, a.is_correct, a.flagged, a.subject, a.chapter, a.knowledge_point, a.duration_ms, a.submitted_at, a.created_at";
 
 fn map_attempt(row: &rusqlite::Row<'_>) -> rusqlite::Result<AttemptOut> {
-    let snapshot_raw: String = row.get(6)?;
+    let snapshot_raw: String = row.get(8)?;
     let question_snapshot = if snapshot_raw.is_empty() {
         serde_json::Value::Null
     } else {
         serde_json::from_str(&snapshot_raw).unwrap_or(serde_json::Value::Null)
     };
+    let user_answer_raw: String = row.get(9)?;
+    let user_answer_is_null = row.get::<_, i64>(10)? != 0;
     Ok(AttemptOut {
         seq: row.get(0)?,
         idempotency_key: row.get(1)?,
         session_key: row.get(2)?,
         device_id: row.get(3)?,
-        question_key: row.get(4)?,
-        session_question_id: row.get(5)?,
+        bank_key: row.get(4)?,
+        question_key: row.get(5)?,
+        original_question_id: row.get(6)?,
+        session_question_id: row.get(7)?,
         question_snapshot,
-        user_answer: row.get(7)?,
-        correct_answer: row.get(8)?,
-        is_correct: row.get::<_, Option<i64>>(9)?.map(|v| v != 0),
-        flagged: row.get::<_, i64>(10)? != 0,
-        subject: row.get(11)?,
-        chapter: row.get(12)?,
-        knowledge_point: row.get(13)?,
-        submitted_at: row.get(14)?,
-        created_at: row.get(15)?,
+        user_answer: if user_answer_is_null { None } else { Some(user_answer_raw) },
+        correct_answer: row.get(11)?,
+        is_correct: row.get::<_, Option<i64>>(12)?.map(|v| v != 0),
+        flagged: row.get::<_, i64>(13)? != 0,
+        subject: row.get(14)?,
+        chapter: row.get(15)?,
+        knowledge_point: row.get(16)?,
+        duration_ms: row.get(17)?,
+        submitted_at: row.get(18)?,
+        created_at: row.get(19)?,
         feed_seq: None,
+        wrong_count: None,
+        attempt_count: None,
         snapshot_raw,
     })
 }
 
 fn map_feed_attempt(row: &rusqlite::Row<'_>) -> rusqlite::Result<AttemptOut> {
     let mut attempt = map_attempt(row)?;
-    attempt.feed_seq = Some(row.get(16)?);
+    attempt.feed_seq = Some(row.get(20)?);
+    attempt.wrong_count = Some(row.get(21)?);
+    attempt.attempt_count = Some(row.get(22)?);
     Ok(attempt)
 }
 
@@ -393,14 +532,24 @@ fn normalize_attempt(input: &AttemptInput, now: i64) -> Result<AttemptRow, Strin
     let idempotency_key = require_key(input.idempotency_key.clone(), "idempotencyKey")?;
     let session_key = require_key(input.session_key.clone(), "sessionKey")?;
     let device_id = optional_text(input.device_id.clone(), "deviceId", MAX_KEY_LEN)?;
+    let bank_key = optional_text(input.bank_key.clone(), "bankKey", MAX_KEY_LEN)?;
     let question_key = require_key(input.question_key.clone(), "questionKey")?;
+    let original_question_id = optional_text(
+        input.original_question_id.clone(),
+        "originalQuestionId",
+        MAX_KEY_LEN,
+    )?;
     let session_question_id = optional_text(
         input.session_question_id.clone(),
         "sessionQuestionId",
         MAX_KEY_LEN,
     )?;
     let question_snapshot = normalize_snapshot(input.question_snapshot.as_ref())?;
-    let user_answer = optional_text(input.user_answer.clone(), "userAnswer", MAX_ANSWER_LEN)?;
+    let user_answer = match input.user_answer.clone() {
+        None => None,
+        Some(value) if value.len() <= MAX_ANSWER_LEN => Some(value),
+        Some(_) => return Err(format!("userAnswer exceeds {MAX_ANSWER_LEN} characters")),
+    };
     let correct_answer = optional_text(
         input.correct_answer.clone(),
         "correctAnswer",
@@ -409,6 +558,10 @@ fn normalize_attempt(input: &AttemptInput, now: i64) -> Result<AttemptRow, Strin
     let subject = optional_tag(input.subject.clone(), "subject")?;
     let chapter = optional_tag(input.chapter.clone(), "chapter")?;
     let knowledge_point = optional_tag(input.knowledge_point.clone(), "knowledgePoint")?;
+    let duration_ms = input.duration_ms.unwrap_or(0);
+    if duration_ms < 0 {
+        return Err("durationMs must not be negative".to_string());
+    }
     let (submitted_at, submitted_at_explicit) = match input.submitted_at {
         Some(v) if v < 0 => return Err("submittedAt must not be negative".to_string()),
         Some(v) => (v, true),
@@ -418,7 +571,9 @@ fn normalize_attempt(input: &AttemptInput, now: i64) -> Result<AttemptRow, Strin
         idempotency_key,
         session_key,
         device_id,
+        bank_key,
         question_key,
+        original_question_id,
         session_question_id,
         question_snapshot,
         user_answer,
@@ -428,26 +583,29 @@ fn normalize_attempt(input: &AttemptInput, now: i64) -> Result<AttemptRow, Strin
         subject,
         chapter,
         knowledge_point,
+        duration_ms,
         submitted_at,
         submitted_at_explicit,
     })
 }
 
-/// All fields except `flagged` must be identical for a retry with the same
-/// idempotency key. `submittedAt` may be omitted by the client (server
-/// assigns it), so an omitted value matches whatever is stored.
+/// Immutable attempt identity/content must match for a retry with the same
+/// idempotency key. `flagged` may toggle and `isCorrect` may transition once
+/// from unknown to a final grade. `submittedAt` may be omitted by the client.
 fn rows_match(existing: &AttemptOut, incoming: &AttemptRow) -> bool {
     if existing.session_key != incoming.session_key
         || existing.device_id != incoming.device_id
+        || existing.bank_key != incoming.bank_key
         || existing.question_key != incoming.question_key
+        || existing.original_question_id != incoming.original_question_id
         || existing.session_question_id != incoming.session_question_id
         || existing.snapshot_raw != incoming.question_snapshot
         || existing.user_answer != incoming.user_answer
         || existing.correct_answer != incoming.correct_answer
-        || existing.is_correct != incoming.is_correct
         || existing.subject != incoming.subject
         || existing.chapter != incoming.chapter
         || existing.knowledge_point != incoming.knowledge_point
+        || existing.duration_ms != incoming.duration_ms
     {
         return false;
     }
@@ -507,25 +665,29 @@ fn insert_batch(conn: &Connection, rows: &[AttemptRow], now: i64) -> Result<Batc
         let inserted = tx
             .execute(
                 "INSERT INTO study_attempts
-                   (idempotency_key, session_key, device_id, question_key, session_question_id,
-                    question_snapshot, user_answer, correct_answer, is_correct, flagged,
-                    subject, chapter, knowledge_point, submitted_at, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+                   (idempotency_key, session_key, device_id, bank_key, question_key, original_question_id,
+                    session_question_id, question_snapshot, user_answer, user_answer_is_null, correct_answer, is_correct, flagged,
+                    subject, chapter, knowledge_point, duration_ms, submitted_at, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
                  ON CONFLICT(idempotency_key) DO NOTHING",
                 params![
                     row.idempotency_key,
                     row.session_key,
                     row.device_id,
+                    row.bank_key,
                     row.question_key,
+                    row.original_question_id,
                     row.session_question_id,
                     row.question_snapshot,
-                    row.user_answer,
+                    row.user_answer.as_deref().unwrap_or(""),
+                    row.user_answer.is_none(),
                     row.correct_answer,
                     row.is_correct,
                     row.flagged,
                     row.subject,
                     row.chapter,
                     row.knowledge_point,
+                    row.duration_ms,
                     row.submitted_at,
                     now,
                 ],
@@ -534,29 +696,46 @@ fn insert_batch(conn: &Connection, rows: &[AttemptRow], now: i64) -> Result<Batc
         if inserted > 0 {
             let attempt_seq = tx.last_insert_rowid();
             if row.is_correct == Some(false) || row.flagged {
-                let reason = if row.is_correct == Some(false) { "wrong" } else { "flagged" };
+                let reason = if row.is_correct == Some(false) {
+                    "wrong"
+                } else {
+                    "flagged"
+                };
                 insert_review_event(&tx, attempt_seq, reason, now)?;
             }
             counts.accepted += 1;
             touched_sessions.push(row.session_key.clone());
             continue;
         }
-        // Duplicate idempotency key: identical payload -> duplicate; only
-        // `flagged` changed -> update in place (no new history row); any other
-        // change -> ignored (immutable fields cannot be rewritten).
+        // Duplicate idempotency key: immutable content cannot be rewritten.
+        // Two mutable transitions are allowed in place:
+        //   1) flagged may toggle;
+        //   2) an ungraded attempt may receive its first final grade.
         let existing = fetch_attempt_by_idempotency(&tx, &row.idempotency_key)?
             .ok_or_else(|| "inconsistent duplicate idempotency key".to_string())?;
         if !rows_match(&existing, row) {
             counts.duplicates += 1;
             continue;
         }
-        if existing.flagged != row.flagged {
+        let grade_changed = existing.is_correct != row.is_correct;
+        if grade_changed && existing.is_correct.is_some() {
+            // A final grade is immutable; do not silently rewrite history.
+            counts.duplicates += 1;
+            continue;
+        }
+        let flag_changed = existing.flagged != row.flagged;
+        if grade_changed || flag_changed {
             tx.execute(
-                "UPDATE study_attempts SET flagged = ?1 WHERE seq = ?2",
-                params![row.flagged, existing.seq],
+                "UPDATE study_attempts SET is_correct = ?1, flagged = ?2 WHERE seq = ?3",
+                params![row.is_correct, row.flagged, existing.seq],
             )
             .map_err(|e| e.to_string())?;
-            if !existing.flagged && row.flagged {
+
+            let became_wrong = existing.is_correct != Some(false) && row.is_correct == Some(false);
+            let became_flagged = !existing.flagged && row.flagged;
+            if became_wrong {
+                insert_review_event(&tx, existing.seq, "wrong", now)?;
+            } else if became_flagged {
                 insert_review_event(&tx, existing.seq, "flagged", now)?;
             }
             counts.updated += 1;
@@ -616,6 +795,55 @@ pub async fn attempts_batch_handler(
         updated: counts.updated,
         duplicates: counts.duplicates,
     }))
+}
+
+
+#[derive(Deserialize)]
+pub struct FlagReq {
+    pub flagged: bool,
+}
+
+fn run_flag_update(
+    conn: &Connection,
+    idempotency_key: &str,
+    flagged: bool,
+    now: i64,
+) -> Result<Option<AttemptOut>, String> {
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    let Some(existing) = fetch_attempt_by_idempotency(&tx, idempotency_key)? else {
+        tx.commit().map_err(|e| e.to_string())?;
+        return Ok(None);
+    };
+    if existing.flagged != flagged {
+        tx.execute(
+            "UPDATE study_attempts SET flagged = ?1 WHERE seq = ?2",
+            params![flagged, existing.seq],
+        )
+        .map_err(|e| e.to_string())?;
+        if !existing.flagged && flagged {
+            insert_review_event(&tx, existing.seq, "flagged", now)?;
+        }
+    }
+    tx.commit().map_err(|e| e.to_string())?;
+    fetch_attempt_by_idempotency(conn, idempotency_key)
+}
+
+pub async fn attempt_flag_handler(
+    State(state): State<Arc<AppState>>,
+    Path(idempotency_key): Path<String>,
+    Json(req): Json<FlagReq>,
+) -> Result<Json<serde_json::Value>, Err> {
+    if idempotency_key.trim().is_empty() || idempotency_key.len() > MAX_KEY_LEN {
+        return Err(err(StatusCode::BAD_REQUEST, "invalid_attempt_id"));
+    }
+    let conn = lock_conn(&state)?;
+    let attempt = run_flag_update(&conn, &idempotency_key, req.flagged, now_ms())
+        .map_err(|e| err_msg(StatusCode::INTERNAL_SERVER_ERROR, "db_error", e))?
+        .ok_or_else(|| err(StatusCode::NOT_FOUND, "attempt_not_found"))?;
+    Ok(Json(serde_json::json!({
+        "idempotencyKey": attempt.idempotency_key,
+        "flagged": attempt.flagged,
+    })))
 }
 
 // ---------------------------------------------------------------------------
@@ -720,6 +948,25 @@ pub async fn sessions_finish_handler(
     })))
 }
 
+
+pub async fn sessions_finish_path_handler(
+    State(state): State<Arc<AppState>>,
+    Path(session_key): Path<String>,
+    Json(mut req): Json<FinishReq>,
+) -> Result<Json<serde_json::Value>, Err> {
+    if let Some(body_key) = req.session_key.as_deref() {
+        if body_key != session_key {
+            return Err(err_msg(
+                StatusCode::BAD_REQUEST,
+                "invalid_session",
+                "sessionKey in body must match path",
+            ));
+        }
+    }
+    req.session_key = Some(session_key);
+    sessions_finish_handler(State(state), Json(req)).await
+}
+
 struct LatestSession {
     session_key: String,
     started_at: Option<i64>,
@@ -793,6 +1040,8 @@ fn run_feed(
     after: Option<i64>,
     subject: Option<&str>,
     chapter: Option<&str>,
+    bank_key: Option<&str>,
+    include_flagged: bool,
     limit: i64,
 ) -> Result<FeedPage, Err> {
     let stored: i64 = conn
@@ -806,28 +1055,40 @@ fn run_feed(
         .unwrap_or(0);
     let start = after.unwrap_or(stored);
     let sql = format!(
-        "SELECT {ATTEMPT_COLUMNS_A}, MAX(e.seq) AS feed_seq
+        "SELECT {ATTEMPT_COLUMNS_A}, MAX(e.seq) AS feed_seq,
+                (SELECT COUNT(*) FROM study_attempts aw
+                 WHERE aw.question_key = a.question_key AND aw.is_correct = 0) AS wrong_count,
+                (SELECT COUNT(*) FROM study_attempts aa
+                 WHERE aa.question_key = a.question_key) AS attempt_count
          FROM study_review_events e
          JOIN study_attempts a ON a.seq = e.attempt_seq
          WHERE e.seq > ?1
-           AND (a.is_correct = 0 OR a.flagged = 1)
-           AND (?2 IS NULL OR a.subject = ?2)
-           AND (?3 IS NULL OR a.chapter = ?3)
+           AND (a.is_correct = 0 OR (?5 != 0 AND a.flagged = 1))
+           AND (?2 IS NULL OR a.subject = ?2 COLLATE NOCASE)
+           AND (?3 IS NULL OR a.chapter = ?3 COLLATE NOCASE)
+           AND (?4 IS NULL OR a.bank_key = ?4)
          GROUP BY a.seq
-         ORDER BY feed_seq ASC LIMIT ?4"
+         ORDER BY feed_seq ASC LIMIT ?6"
     );
     let mut stmt = conn
         .prepare(&sql)
         .map_err(|e| err_msg(StatusCode::INTERNAL_SERVER_ERROR, "db_error", e))?;
     let attempts: Vec<AttemptOut> = stmt
-        .query_map(params![start, subject, chapter, limit], map_feed_attempt)
+        .query_map(
+            params![
+                start,
+                subject,
+                chapter,
+                bank_key,
+                include_flagged as i64,
+                limit
+            ],
+            map_feed_attempt,
+        )
         .map_err(|e| err_msg(StatusCode::INTERNAL_SERVER_ERROR, "db_error", e))?
         .filter_map(|r| r.ok())
         .collect();
-    let next_cursor = attempts
-        .last()
-        .and_then(|a| a.feed_seq)
-        .unwrap_or(start);
+    let next_cursor = attempts.last().and_then(|a| a.feed_seq).unwrap_or(start);
     Ok(FeedPage {
         stored_cursor: start,
         next_cursor,
@@ -836,9 +1097,11 @@ fn run_feed(
 }
 
 fn run_ack(conn: &Connection, consumer: &str, cursor: i64) -> Result<i64, Err> {
+    // AUTOINCREMENT high-water is monotonic even if review rows are ever
+    // deleted/compacted later; MAX(seq) could move backwards after deletion.
     let max_seq: i64 = conn
         .query_row(
-            "SELECT COALESCE(MAX(seq), 0) FROM study_review_events",
+            "SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name = 'study_review_events'), 0)",
             [],
             |r| r.get(0),
         )
@@ -846,7 +1109,7 @@ fn run_ack(conn: &Connection, consumer: &str, cursor: i64) -> Result<i64, Err> {
     if cursor > max_seq {
         return Err(err_msg(
             StatusCode::BAD_REQUEST,
-            "cursor_ahead",
+            "CURSOR_AHEAD_OF_FEED",
             format!("cursor {cursor} is ahead of the latest seq {max_seq}"),
         ));
     }
@@ -872,6 +1135,10 @@ pub struct FeedQuery {
     pub after: Option<i64>,
     pub subject: Option<String>,
     pub chapter: Option<String>,
+    #[serde(rename = "bankKey")]
+    pub bank_key: Option<String>,
+    #[serde(rename = "includeFlagged")]
+    pub include_flagged: Option<bool>,
     pub limit: Option<i64>,
 }
 
@@ -917,6 +1184,8 @@ pub async fn feed_handler(
     }
     let subject = tag_filter(q.subject, "subject")?;
     let chapter = tag_filter(q.chapter, "chapter")?;
+    let bank_key = tag_filter(q.bank_key, "bankKey")?;
+    let include_flagged = q.include_flagged.unwrap_or(true);
     let limit = q
         .limit
         .unwrap_or(DEFAULT_PAGE_LIMIT)
@@ -928,6 +1197,8 @@ pub async fn feed_handler(
         q.after,
         subject.as_deref(),
         chapter.as_deref(),
+        bank_key.as_deref(),
+        include_flagged,
         limit,
     )?;
     Ok(Json(serde_json::json!({
@@ -1034,6 +1305,8 @@ const BANK_SCHEMA_VERSION: i64 = 1;
 /// identifiers of at most 128 characters (deliberately stricter than the
 /// `MAX_KEY_LEN` used for attempt/session keys).
 const MAX_SCHEMA_KEY_LEN: usize = 128;
+const MIN_SCHEMA_KEY_LEN: usize = 3;
+const BANK_METADATA_FIELDS: &[&str] = &["exam", "outlineVersion", "subject"];
 /// schema.py `QUESTION_TYPES`: `short_answer` is deliberately not allowed.
 const BANK_QUESTION_TYPES: &[&str] = &["single_choice", "multi_choice", "true_false", "fill_blank"];
 const BANK_CHOICE_TYPES: &[&str] = &["single_choice", "multi_choice"];
@@ -1042,6 +1315,8 @@ const BANK_FIELDS: &[&str] = &[
     "schemaVersion",
     "key",
     "name",
+    "version",
+    "metadata",
     "questions",
     "subject",
     "chapter",
@@ -1083,10 +1358,15 @@ fn check_identifier(value: &serde_json::Value, path: &str) -> Result<(), String>
     let text = value
         .as_str()
         .ok_or_else(|| format!("{path} must be a string"))?;
-    if text.is_empty() {
+    if text.trim().is_empty() {
         return Err(format!("{path} must not be empty"));
     }
     let char_count = text.chars().count();
+    if char_count < MIN_SCHEMA_KEY_LEN {
+        return Err(format!(
+            "{path} must be at least {MIN_SCHEMA_KEY_LEN} characters"
+        ));
+    }
     if char_count > MAX_SCHEMA_KEY_LEN {
         return Err(format!(
             "{path} must be at most {MAX_SCHEMA_KEY_LEN} characters (got {char_count})"
@@ -1101,16 +1381,46 @@ fn check_identifier(value: &serde_json::Value, path: &str) -> Result<(), String>
     if text.chars().any(|c| (c as u32) < 32 || (c as u32) == 127) {
         return Err(format!("{path} must not contain control characters"));
     }
+    if !text
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | ':' | '-'))
+    {
+        return Err(format!(
+            "{path} may contain only ASCII letters, digits, '.', '_', ':', or '-'"
+        ));
+    }
     Ok(())
 }
 
 /// schema.py `_check_tags`: a list of non-empty strings.
+fn check_metadata(value: &serde_json::Value) -> Result<(), String> {
+    let obj = value
+        .as_object()
+        .ok_or_else(|| "metadata must be an object".to_string())?;
+    check_unknown_fields(obj, BANK_METADATA_FIELDS, "metadata")?;
+    for field in BANK_METADATA_FIELDS {
+        let value = obj
+            .get(*field)
+            .ok_or_else(|| format!("metadata: missing required metadata field: {field}"))?;
+        check_text(value, &format!("metadata.{field}"))?;
+    }
+    Ok(())
+}
+
 fn check_tags(value: &serde_json::Value, path: &str) -> Result<(), String> {
     let tags = value
         .as_array()
         .ok_or_else(|| format!("{path} must be a list of strings"))?;
+    let mut seen = HashSet::new();
     for (tag_index, tag) in tags.iter().enumerate() {
         check_text(tag, &format!("{path}[{tag_index}]"))?;
+        if let Some(text) = tag.as_str() {
+            if !seen.insert(text) {
+                return Err(format!(
+                    "{path}: duplicate tag '{text}'; tags must be unique"
+                ));
+            }
+        }
     }
     Ok(())
 }
@@ -1148,14 +1458,11 @@ fn check_choice_answer(
     option_count: usize,
     multi: bool,
 ) -> Result<(), String> {
-    let answer = value
-        .as_str()
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| {
-            format!(
-                "{path}: answer must be a non-empty string of option letters (e.g. \"A\" or \"ABD\")"
-            )
-        })?;
+    let answer = value.as_str().filter(|s| !s.is_empty()).ok_or_else(|| {
+        format!(
+            "{path}: answer must be a non-empty string of option letters (e.g. \"A\" or \"ABD\")"
+        )
+    })?;
     let letters: Vec<char> = answer.chars().collect();
     if letters.iter().any(|c| !c.is_ascii_uppercase()) {
         return Err(format!(
@@ -1244,7 +1551,7 @@ fn validate_question(question: &serde_json::Value, index: usize) -> Result<(), S
         ));
     }
     if let Some(value) = obj.get("id") {
-        check_text(value, &format!("{path}.id"))?;
+        check_identifier(value, &format!("{path}.id"))?;
     }
     if let Some(value) = obj.get("stableKey") {
         check_identifier(value, &format!("{path}.stableKey"))?;
@@ -1344,15 +1651,13 @@ fn validate_bank_v1(
         None => {
             return Err(format!(
                 "missing required field: schemaVersion (must be {BANK_SCHEMA_VERSION})"
-            ))
+            ));
         }
-        Some(serde_json::Value::Number(number)) if number.is_i64() => {
-            number.as_i64().unwrap_or(0)
-        }
+        Some(serde_json::Value::Number(number)) if number.is_i64() => number.as_i64().unwrap_or(0),
         Some(_) => {
             return Err(format!(
                 "schemaVersion must be the integer {BANK_SCHEMA_VERSION}"
-            ))
+            ));
         }
     };
     if version != BANK_SCHEMA_VERSION {
@@ -1377,6 +1682,20 @@ fn validate_bank_v1(
         return Err(format!("bank name exceeds {MAX_BANK_NAME_LEN} characters"));
     }
 
+    let content_version = obj
+        .get("version")
+        .ok_or_else(|| "missing required field: version".to_string())?;
+    let content_version = content_version
+        .as_i64()
+        .filter(|version| *version >= 1)
+        .ok_or_else(|| "version must be an integer >= 1".to_string())?;
+    let _ = content_version;
+
+    let metadata = obj
+        .get("metadata")
+        .ok_or_else(|| "missing required field: metadata".to_string())?;
+    check_metadata(metadata)?;
+
     let questions = obj
         .get("questions")
         .ok_or_else(|| "missing required field: questions".to_string())?
@@ -1386,21 +1705,26 @@ fn validate_bank_v1(
         return Err(format!("questions exceed {MAX_BANK_QUESTIONS} items"));
     }
 
-    // schema.py `_check_duplicate_stable_keys`: stable keys must be unique
-    // within one bank so re-imports stay idempotent.
+    // Both local ids and stable keys must be unique within one bank. Local ids
+    // are used by wrong-book/session state; stable keys are used for durable sync.
+    let mut ids: HashSet<&str> = HashSet::new();
     let mut stable_keys: HashSet<&str> = HashSet::new();
     for (index, question) in questions.iter().enumerate() {
         validate_question(question, index)?;
-        if let Some(stable_key) = question
-            .as_object()
-            .and_then(|q| q.get("stableKey"))
-            .and_then(|value| value.as_str())
-        {
-            if !stable_key.is_empty() && !stable_keys.insert(stable_key) {
-                return Err(format!(
-                    "questions: duplicate stableKey '{stable_key}' (stable keys must \
-                     be unique within one bank)"
-                ));
+        if let Some(obj) = question.as_object() {
+            if let Some(id) = obj.get("id").and_then(|value| value.as_str()) {
+                if !id.is_empty() && !ids.insert(id) {
+                    return Err(format!(
+                        "questions: duplicate id '{id}' (id values must be unique within one bank)"
+                    ));
+                }
+            }
+            if let Some(stable_key) = obj.get("stableKey").and_then(|value| value.as_str()) {
+                if !stable_key.is_empty() && !stable_keys.insert(stable_key) {
+                    return Err(format!(
+                        "questions: duplicate stableKey '{stable_key}' (stableKey values must be unique within one bank)"
+                    ));
+                }
             }
         }
     }
@@ -1422,7 +1746,9 @@ fn validate_bank_v1(
     let serialized = serde_json::to_string(bank)
         .map_err(|e| format!("bank payload is not serializable: {e}"))?;
     if serialized.len() > MAX_BANK_PAYLOAD_BYTES {
-        return Err(format!("bank payload exceeds {MAX_BANK_PAYLOAD_BYTES} bytes"));
+        return Err(format!(
+            "bank payload exceeds {MAX_BANK_PAYLOAD_BYTES} bytes"
+        ));
     }
 
     Ok((bank_key, name, bank.clone(), questions.len()))
@@ -1472,6 +1798,7 @@ fn validate_bank(
 struct StoredBank {
     name: String,
     payload: String,
+    content_hash: String,
     question_count: i64,
     created_at: i64,
     updated_at: i64,
@@ -1485,15 +1812,28 @@ fn run_bank_import(
     question_count: usize,
     now: i64,
 ) -> Result<(), Err> {
+    let content_hash = sha256_hex(payload_json);
     conn.execute(
-        "INSERT INTO study_banks (bank_key, name, payload, question_count, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?5)
+        "INSERT INTO study_banks
+           (bank_key, name, payload, content_hash, question_count, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)
          ON CONFLICT(bank_key) DO UPDATE SET
            name = excluded.name,
            payload = excluded.payload,
+           content_hash = excluded.content_hash,
            question_count = excluded.question_count,
-           updated_at = excluded.updated_at",
-        params![bank_key, name, payload_json, question_count as i64, now],
+           updated_at = CASE
+             WHEN study_banks.content_hash = excluded.content_hash THEN study_banks.updated_at
+             ELSE excluded.updated_at
+           END",
+        params![
+            bank_key,
+            name,
+            payload_json,
+            content_hash,
+            question_count as i64,
+            now
+        ],
     )
     .map_err(|e| err_msg(StatusCode::INTERNAL_SERVER_ERROR, "db_error", e))?;
     Ok(())
@@ -1501,15 +1841,16 @@ fn run_bank_import(
 
 fn run_bank_get(conn: &Connection, bank_key: &str) -> Result<Option<StoredBank>, Err> {
     conn.query_row(
-        "SELECT name, payload, question_count, created_at, updated_at FROM study_banks WHERE bank_key = ?1",
+        "SELECT name, payload, content_hash, question_count, created_at, updated_at FROM study_banks WHERE bank_key = ?1",
         params![bank_key],
         |r| {
             Ok(StoredBank {
                 name: r.get(0)?,
                 payload: r.get(1)?,
-                question_count: r.get(2)?,
-                created_at: r.get(3)?,
-                updated_at: r.get(4)?,
+                content_hash: r.get(2)?,
+                question_count: r.get(3)?,
+                created_at: r.get(4)?,
+                updated_at: r.get(5)?,
             })
         },
     )
@@ -1528,10 +1869,13 @@ pub async fn banks_import_handler(
     let now = now_ms();
     let conn = lock_conn(&state)?;
     run_bank_import(&conn, &bank_key, &name, &payload_json, question_count, now)?;
+    let stored = run_bank_get(&conn, &bank_key)?
+        .ok_or_else(|| err(StatusCode::INTERNAL_SERVER_ERROR, "bank_store_missing"))?;
     Ok(Json(serde_json::json!({
         "bankKey": bank_key,
+        "contentHash": stored.content_hash,
         "questionCount": question_count,
-        "updatedAt": now,
+        "updatedAt": stored.updated_at,
     })))
 }
 
@@ -1541,7 +1885,7 @@ pub async fn banks_list_handler(
     let conn = lock_conn(&state)?;
     let mut stmt = conn
         .prepare(
-            "SELECT bank_key, name, question_count, created_at, updated_at
+            "SELECT bank_key, name, content_hash, question_count, created_at, updated_at
              FROM study_banks ORDER BY updated_at DESC, bank_key ASC LIMIT ?1",
         )
         .map_err(|e| err_msg(StatusCode::INTERNAL_SERVER_ERROR, "db_error", e))?;
@@ -1550,9 +1894,10 @@ pub async fn banks_list_handler(
             Ok(serde_json::json!({
                 "bankKey": r.get::<_, String>(0)?,
                 "name": r.get::<_, String>(1)?,
-                "questionCount": r.get::<_, i64>(2)?,
-                "createdAt": r.get::<_, i64>(3)?,
-                "updatedAt": r.get::<_, i64>(4)?,
+                "contentHash": r.get::<_, String>(2)?,
+                "questionCount": r.get::<_, i64>(3)?,
+                "createdAt": r.get::<_, i64>(4)?,
+                "updatedAt": r.get::<_, i64>(5)?,
             }))
         })
         .map_err(|e| err_msg(StatusCode::INTERNAL_SERVER_ERROR, "db_error", e))?
@@ -1581,6 +1926,7 @@ pub async fn banks_get_handler(
     Ok(Json(serde_json::json!({
         "bankKey": bank_key,
         "name": stored.name,
+        "contentHash": stored.content_hash,
         "questionCount": stored.question_count,
         "createdAt": stored.created_at,
         "updatedAt": stored.updated_at,
@@ -1637,7 +1983,9 @@ mod tests {
             "idempotencyKey": idem,
             "sessionKey": session,
             "deviceId": "test-device",
+            "bankKey": "bank-main",
             "questionKey": qkey,
+            "originalQuestionId": qkey,
             "sessionQuestionId": format!("{session}#{qkey}"),
             "questionSnapshot": { "id": qkey, "stem": format!("stem of {qkey}") },
             "userAnswer": "A",
@@ -1647,6 +1995,7 @@ mod tests {
             "subject": subject,
             "chapter": "ch1",
             "knowledgePoint": "kp1",
+            "durationMs": 250,
             "submittedAt": submitted_at,
         })
     }
@@ -1675,6 +2024,12 @@ mod tests {
              CREATE TABLE study_consumers (
                consumer TEXT PRIMARY KEY, cursor INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL
              );
+             CREATE TABLE study_banks (
+               bank_key TEXT PRIMARY KEY, name TEXT NOT NULL, payload TEXT NOT NULL,
+               question_count INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+             );
+             INSERT INTO study_banks (bank_key,name,payload,question_count,created_at,updated_at)
+             VALUES ('old-bank','Old Bank','{}',0,5,5);
              INSERT INTO study_attempts
                (idempotency_key,session_key,question_key,is_correct,flagged,submitted_at,created_at)
              VALUES ('old-wrong','s','q1',0,0,1,10),
@@ -1685,16 +2040,77 @@ mod tests {
 
         init_tables(&conn).unwrap();
         let has_device: bool = conn
-            .prepare("PRAGMA table_info(study_attempts)").unwrap()
-            .query_map([], |row| row.get::<_, String>(1)).unwrap()
-            .filter_map(Result::ok).any(|name| name == "device_id");
+            .prepare("PRAGMA table_info(study_attempts)")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .filter_map(Result::ok)
+            .any(|name| name == "device_id");
         assert!(has_device);
+        let has_bank: bool = conn
+            .prepare("PRAGMA table_info(study_attempts)")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .filter_map(Result::ok)
+            .any(|name| name == "bank_key");
+        assert!(has_bank);
+        let has_duration: bool = conn
+            .prepare("PRAGMA table_info(study_attempts)")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .filter_map(Result::ok)
+            .any(|name| name == "duration_ms");
+        assert!(has_duration);
+        let has_original_id: bool = conn
+            .prepare("PRAGMA table_info(study_attempts)")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .filter_map(Result::ok)
+            .any(|name| name == "original_question_id");
+        assert!(has_original_id);
+        let has_user_answer_is_null: bool = conn
+            .prepare("PRAGMA table_info(study_attempts)")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .filter_map(Result::ok)
+            .any(|name| name == "user_answer_is_null");
+        assert!(has_user_answer_is_null);
+        let has_content_hash: bool = conn
+            .prepare("PRAGMA table_info(study_banks)")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .filter_map(Result::ok)
+            .any(|name| name == "content_hash");
+        assert!(has_content_hash);
+
+        let old_attempt = fetch_attempt_by_idempotency(&conn, "old-wrong")
+            .unwrap()
+            .unwrap();
+        assert_eq!(old_attempt.device_id, "");
+        assert_eq!(old_attempt.bank_key, "");
+        assert_eq!(old_attempt.original_question_id, "");
+        assert_eq!(old_attempt.user_answer, Some(String::new()));
+        assert_eq!(old_attempt.duration_ms, 0);
+
+        let old_bank = run_bank_get(&conn, "old-bank").unwrap().unwrap();
+        assert_eq!(old_bank.content_hash, "");
+
         let events: Vec<(i64, String)> = conn
-            .prepare("SELECT attempt_seq, reason FROM study_review_events ORDER BY seq").unwrap()
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap()
-            .map(Result::unwrap).collect();
+            .prepare("SELECT attempt_seq, reason FROM study_review_events ORDER BY seq")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
         assert_eq!(events, vec![(1, "wrong".into()), (2, "flagged".into())]);
-        let consumers: i64 = conn.query_row("SELECT COUNT(*) FROM study_consumers", [], |r| r.get(0)).unwrap();
+        let consumers: i64 = conn
+            .query_row("SELECT COUNT(*) FROM study_consumers", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(consumers, 0);
     }
 
@@ -1752,6 +2168,69 @@ mod tests {
     }
 
     #[test]
+    fn batch_preserves_null_user_answer() {
+        let conn = test_conn();
+        let mut attempt = attempt_json(
+            "null-answer",
+            "s-null",
+            "q-null",
+            json!(false),
+            false,
+            "math",
+            1000,
+        );
+        attempt["userAnswer"] = serde_json::Value::Null;
+        process_batch(&conn, &[input(attempt)], 5000).unwrap();
+
+        let stored = fetch_attempt_by_idempotency(&conn, "null-answer")
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.user_answer, None);
+
+        let history = run_history(&conn, "q-null", 10).unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].user_answer, None);
+    }
+
+    #[test]
+    fn batch_allows_first_grade_for_previously_ungraded_attempt() {
+        let conn = test_conn();
+        let ungraded = attempt_json(
+            "grade1",
+            "s1",
+            "q-grade",
+            serde_json::Value::Null,
+            false,
+            "math",
+            1000,
+        );
+        let c = process_batch(&conn, &[input(ungraded)], 5000).unwrap();
+        assert_eq!(counts(&c), (1, 0, 0));
+
+        let graded_wrong =
+            attempt_json("grade1", "s1", "q-grade", json!(false), false, "math", 1000);
+        let c = process_batch(&conn, &[input(graded_wrong)], 6000).unwrap();
+        assert_eq!(counts(&c), (0, 1, 0));
+
+        let stored = fetch_attempt_by_idempotency(&conn, "grade1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.is_correct, Some(false));
+        let page = run_feed(&conn, "grade-review", None, None, None, None, true, 100).unwrap();
+        assert_eq!(page.attempts.len(), 1);
+        assert_eq!(page.attempts[0].question_key, "q-grade");
+
+        // A final grade cannot later be flipped.
+        let regraded = attempt_json("grade1", "s1", "q-grade", json!(true), false, "math", 1000);
+        let c = process_batch(&conn, &[input(regraded)], 7000).unwrap();
+        assert_eq!(counts(&c), (0, 0, 1));
+        let stored = fetch_attempt_by_idempotency(&conn, "grade1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.is_correct, Some(false));
+    }
+
+    #[test]
     fn feed_filters_and_cursor_ack() {
         let conn = test_conn();
         let batch = [
@@ -1804,13 +2283,20 @@ mod tests {
         process_batch(&conn, &batch, 5000).unwrap();
 
         // only wrong or flagged attempts, seq ASC
-        let page = run_feed(&conn, "cli", None, None, None, 100).unwrap();
+        let page = run_feed(&conn, "cli", None, None, None, None, true, 100).unwrap();
         assert_eq!(page.stored_cursor, 0);
         let seqs: Vec<i64> = page.attempts.iter().map(|a| a.seq).collect();
         assert_eq!(seqs, vec![1, 3, 5]);
         let feed_seqs: Vec<i64> = page.attempts.iter().filter_map(|a| a.feed_seq).collect();
         assert_eq!(feed_seqs, vec![1, 2, 3]);
         assert_eq!(page.next_cursor, 3);
+        assert_eq!(page.attempts[0].wrong_count, Some(1));
+        assert_eq!(page.attempts[0].attempt_count, Some(1));
+
+        // exclude flagged-only attempts without changing the event cursor model
+        let wrong_only = run_feed(&conn, "wrong-only", None, None, None, None, false, 100).unwrap();
+        let wrong_only_seqs: Vec<i64> = wrong_only.attempts.iter().map(|a| a.seq).collect();
+        assert_eq!(wrong_only_seqs, vec![1, 5]);
 
         // feed must not implicitly advance the cursor
         let stored: Option<i64> = conn
@@ -1824,13 +2310,16 @@ mod tests {
         assert_eq!(stored, None);
 
         // explicit after overrides the stored cursor
-        let page = run_feed(&conn, "cli", Some(2), None, None, 100).unwrap();
+        let page = run_feed(&conn, "cli", Some(2), None, None, None, true, 100).unwrap();
         assert_eq!(page.stored_cursor, 2);
         let seqs: Vec<i64> = page.attempts.iter().map(|a| a.seq).collect();
         assert_eq!(seqs, vec![5]);
 
         // subject filter
-        let page = run_feed(&conn, "cli", None, Some("math"), None, 100).unwrap();
+        let page = run_feed(&conn, "cli", None, Some("math"), None, None, true, 100).unwrap();
+        let seqs: Vec<i64> = page.attempts.iter().map(|a| a.seq).collect();
+        assert_eq!(seqs, vec![1, 3]);
+        let page = run_feed(&conn, "cli-case", None, Some("MATH"), None, None, true, 100).unwrap();
         let seqs: Vec<i64> = page.attempts.iter().map(|a| a.seq).collect();
         assert_eq!(seqs, vec![1, 3]);
 
@@ -1841,26 +2330,73 @@ mod tests {
         assert_eq!(ahead.0, StatusCode::BAD_REQUEST);
 
         // after ack the feed is empty and nextCursor stays at the stored cursor
-        let page = run_feed(&conn, "cli", None, None, None, 100).unwrap();
+        let page = run_feed(&conn, "cli", None, None, None, None, true, 100).unwrap();
         assert!(page.attempts.is_empty());
         assert_eq!(page.stored_cursor, 3);
         assert_eq!(page.next_cursor, 3);
 
         // a separate consumer starts from 0
-        let page = run_feed(&conn, "phone", None, None, None, 100).unwrap();
+        let page = run_feed(&conn, "phone", None, None, None, None, true, 100).unwrap();
         assert_eq!(page.stored_cursor, 0);
+    }
+
+    #[test]
+    fn feed_bank_filter_and_monotonic_high_water() {
+        let conn = test_conn();
+        let first = attempt_json("b1", "s1", "q1", json!(false), false, "math", 1000);
+        let mut second = attempt_json("b2", "s1", "q2", json!(false), false, "math", 1010);
+        second["bankKey"] = json!("bank-other");
+        process_batch(&conn, &[input(first), input(second)], 5000).unwrap();
+
+        let page = run_feed(
+            &conn,
+            "bank-filter",
+            None,
+            None,
+            None,
+            Some("bank-other"),
+            true,
+            100,
+        )
+        .unwrap();
+        assert_eq!(page.attempts.len(), 1);
+        assert_eq!(page.attempts[0].bank_key, "bank-other");
+
+        // Simulate future compaction: sqlite_sequence must still preserve the
+        // event high-water so cursor validation never moves backwards.
+        conn.execute("DELETE FROM study_review_events WHERE seq = 2", [])
+            .unwrap();
+        assert_eq!(run_ack(&conn, "bank-filter", 2).unwrap(), 2);
+        let ahead = run_ack(&conn, "bank-filter", 3).unwrap_err();
+        assert_eq!(ahead.0, StatusCode::BAD_REQUEST);
     }
 
     #[test]
     fn late_flag_after_ack_creates_new_review_event() {
         let conn = test_conn();
         let initial = [
-            input(attempt_json("late1", "s1", "q1", json!(true), false, "math", 1000)),
-            input(attempt_json("late2", "s1", "q2", json!(false), false, "math", 1010)),
+            input(attempt_json(
+                "late1",
+                "s1",
+                "q1",
+                json!(true),
+                false,
+                "math",
+                1000,
+            )),
+            input(attempt_json(
+                "late2",
+                "s1",
+                "q2",
+                json!(false),
+                false,
+                "math",
+                1010,
+            )),
         ];
         process_batch(&conn, &initial, 5000).unwrap();
 
-        let first = run_feed(&conn, "chatgpt", None, None, None, 100).unwrap();
+        let first = run_feed(&conn, "chatgpt", None, None, None, None, true, 100).unwrap();
         assert_eq!(first.attempts.len(), 1);
         assert_eq!(first.attempts[0].question_key, "q2");
         assert_eq!(first.next_cursor, 1);
@@ -1870,12 +2406,43 @@ mod tests {
         let update_counts = process_batch(&conn, &[input(flagged)], 6000).unwrap();
         assert_eq!(counts(&update_counts), (0, 1, 0));
 
-        let second = run_feed(&conn, "chatgpt", None, None, None, 100).unwrap();
+        let second = run_feed(&conn, "chatgpt", None, None, None, None, true, 100).unwrap();
         assert_eq!(second.attempts.len(), 1);
         assert_eq!(second.attempts[0].question_key, "q1");
         assert!(second.attempts[0].flagged);
         assert_eq!(second.attempts[0].feed_seq, Some(2));
         assert_eq!(second.next_cursor, 2);
+    }
+
+    #[test]
+    fn direct_flag_update_is_idempotent_and_creates_review_event_on_rising_edge() {
+        let conn = test_conn();
+        let initial = attempt_json("flag-direct", "s1", "q-flag", json!(true), false, "math", 1000);
+        process_batch(&conn, &[input(initial)], 5000).unwrap();
+
+        let updated = run_flag_update(&conn, "flag-direct", true, 6000).unwrap().unwrap();
+        assert!(updated.flagged);
+        let page = run_feed(&conn, "flag-direct-consumer", None, None, None, None, true, 100).unwrap();
+        assert_eq!(page.attempts.len(), 1);
+        assert_eq!(page.attempts[0].question_key, "q-flag");
+        let first_cursor = page.next_cursor;
+
+        // Repeating the same state is idempotent and does not create another event.
+        let updated = run_flag_update(&conn, "flag-direct", true, 7000).unwrap().unwrap();
+        assert!(updated.flagged);
+        let page = run_feed(&conn, "flag-direct-consumer", Some(first_cursor), None, None, None, true, 100).unwrap();
+        assert!(page.attempts.is_empty());
+
+        // Unflagging removes it from active attention; re-flagging emits a new event.
+        let updated = run_flag_update(&conn, "flag-direct", false, 8000).unwrap().unwrap();
+        assert!(!updated.flagged);
+        let updated = run_flag_update(&conn, "flag-direct", true, 9000).unwrap().unwrap();
+        assert!(updated.flagged);
+        let page = run_feed(&conn, "flag-direct-consumer", Some(first_cursor), None, None, None, true, 100).unwrap();
+        assert_eq!(page.attempts.len(), 1);
+        assert!(page.next_cursor > first_cursor);
+
+        assert!(run_flag_update(&conn, "missing", true, 10000).unwrap().is_none());
     }
 
     #[test]
@@ -2008,12 +2575,14 @@ mod tests {
             "schemaVersion": 1,
             "key": "sgcc-safety",
             "name": "Bank One",
+            "version": 1,
+            "metadata": { "exam": "国家电网计算机类", "outlineVersion": "2026", "subject": "信息新技术" },
             "subject": "电气安全",
             "chapter": "第一章",
             "tags": ["sgcc", "safety"],
             "sourceMeta": { "origin": "test" },
             "questions": [
-                { "id": "q1", "type": "single_choice", "stem": "Pick one", "options": ["a", "b", "c", "d"], "answer": "A", "analysis": "A is first" },
+                { "id": "qid-1", "type": "single_choice", "stem": "Pick one", "options": ["a", "b", "c", "d"], "answer": "A", "analysis": "A is first" },
                 { "stableKey": "sk-multi", "type": "multi_choice", "stem": "Pick two", "options": ["a", "b", "c"], "answer": "AB", "analysis": "A and B", "difficulty": "hard" },
                 { "stableKey": "sk-true-false", "type": "true_false", "stem": "Sky is blue", "answer": "true", "analysis": "Usually" },
                 { "stableKey": "sk-fill-blank", "type": "fill_blank", "stem": "One plus one is", "answer": "2", "analysis": "Arithmetic" }
@@ -2104,6 +2673,16 @@ mod tests {
     }
 
     #[test]
+    fn bank_rejects_duplicate_ids() {
+        let bank = bank_with_questions(json!([
+            { "id": "dup-id", "stableKey": "key-1", "type": "fill_blank", "stem": "s", "answer": "a", "analysis": "n" },
+            { "id": "dup-id", "stableKey": "key-2", "type": "fill_blank", "stem": "s2", "answer": "b", "analysis": "n" }
+        ]));
+        let err = validate_bank(&bank).unwrap_err();
+        assert!(err.contains("duplicate id"), "{err}");
+    }
+
+    #[test]
     fn bank_rejects_bad_answers() {
         let mut q = question_of("single_choice");
         q["answer"] = json!("a");
@@ -2178,7 +2757,7 @@ mod tests {
 
         let mut q = question_of("fill_blank");
         q["id"] = json!("  ");
-        assert!(question_err(q).contains("whitespace-only"));
+        assert!(question_err(q).contains("must not be empty"));
 
         let mut q = question_of("fill_blank");
         q["oops"] = json!(true);
@@ -2205,11 +2784,43 @@ mod tests {
     }
 
     #[test]
+    fn bank_content_version_and_metadata_rules() {
+        let mut bank = valid_bank();
+        bank.as_object_mut().unwrap().remove("version");
+        assert!(validate_bank(&bank)
+            .unwrap_err()
+            .contains("missing required field: version"));
+
+        let mut bank = valid_bank();
+        bank["version"] = json!(0);
+        assert!(validate_bank(&bank).unwrap_err().contains("integer >= 1"));
+
+        let mut bank = valid_bank();
+        bank.as_object_mut().unwrap().remove("metadata");
+        assert!(validate_bank(&bank)
+            .unwrap_err()
+            .contains("missing required field: metadata"));
+
+        let mut bank = valid_bank();
+        bank["metadata"] = json!({ "exam": "国家电网计算机类", "outlineVersion": "2026" });
+        assert!(validate_bank(&bank)
+            .unwrap_err()
+            .contains("metadata field: subject"));
+
+        let mut bank = valid_bank();
+        bank["key"] = json!("国网-key");
+        assert!(validate_bank(&bank).unwrap_err().contains("ASCII letters"));
+    }
+
+    #[test]
     fn bank_schema_version_and_key_rules() {
         let mut bank = valid_bank();
         bank.as_object_mut().unwrap().remove("schemaVersion");
         let err = validate_bank(&bank).unwrap_err();
-        assert!(err.contains("missing required field: schemaVersion"), "{err}");
+        assert!(
+            err.contains("missing required field: schemaVersion"),
+            "{err}"
+        );
 
         for bad_version in [json!(2), json!("1"), json!(true), json!(1.5)] {
             let mut bank = valid_bank();
@@ -2222,7 +2833,9 @@ mod tests {
 
         let mut bank = valid_bank();
         bank.as_object_mut().unwrap().remove("key");
-        assert!(validate_bank(&bank).unwrap_err().contains("missing required field: key"));
+        assert!(validate_bank(&bank)
+            .unwrap_err()
+            .contains("missing required field: key"));
 
         let bad_keys = [
             String::new(),
@@ -2235,7 +2848,10 @@ mod tests {
         for bad_key in &bad_keys {
             let mut bank = valid_bank();
             bank["key"] = json!(bad_key);
-            assert!(validate_bank(&bank).is_err(), "key {bad_key:?} must be rejected");
+            assert!(
+                validate_bank(&bank).is_err(),
+                "key {bad_key:?} must be rejected"
+            );
         }
 
         let mut bank = valid_bank();
@@ -2249,17 +2865,25 @@ mod tests {
 
         let mut bank = valid_bank();
         bank.as_object_mut().unwrap().remove("name");
-        assert!(validate_bank(&bank).unwrap_err().contains("missing required field: name"));
+        assert!(validate_bank(&bank)
+            .unwrap_err()
+            .contains("missing required field: name"));
         let mut bank = valid_bank();
         bank["name"] = json!("   ");
-        assert!(validate_bank(&bank).unwrap_err().contains("whitespace-only"));
+        assert!(validate_bank(&bank)
+            .unwrap_err()
+            .contains("whitespace-only"));
 
         let mut bank = valid_bank();
         bank.as_object_mut().unwrap().remove("questions");
-        assert!(validate_bank(&bank).unwrap_err().contains("missing required field: questions"));
+        assert!(validate_bank(&bank)
+            .unwrap_err()
+            .contains("missing required field: questions"));
         let mut bank = valid_bank();
         bank["questions"] = json!({});
-        assert!(validate_bank(&bank).unwrap_err().contains("questions must be a list"));
+        assert!(validate_bank(&bank)
+            .unwrap_err()
+            .contains("questions must be a list"));
     }
 
     #[test]
@@ -2271,19 +2895,31 @@ mod tests {
 
         let mut bank = valid_bank();
         bank["subject"] = json!("  ");
-        assert!(validate_bank(&bank).unwrap_err().contains("whitespace-only"));
+        assert!(validate_bank(&bank)
+            .unwrap_err()
+            .contains("whitespace-only"));
 
         let mut bank = valid_bank();
         bank["tags"] = json!("not-a-list");
-        assert!(validate_bank(&bank).unwrap_err().contains("tags must be a list"));
+        assert!(validate_bank(&bank)
+            .unwrap_err()
+            .contains("tags must be a list"));
 
         let mut bank = valid_bank();
         bank["tags"] = json!(["ok", ""]);
-        assert!(validate_bank(&bank).unwrap_err().contains("whitespace-only"));
+        assert!(validate_bank(&bank)
+            .unwrap_err()
+            .contains("whitespace-only"));
+
+        let mut bank = valid_bank();
+        bank["tags"] = json!(["dup", "dup"]);
+        assert!(validate_bank(&bank).unwrap_err().contains("duplicate tag"));
 
         let mut bank = valid_bank();
         bank["sourceMeta"] = json!([1]);
-        assert!(validate_bank(&bank).unwrap_err().contains("sourceMeta must be an object"));
+        assert!(validate_bank(&bank)
+            .unwrap_err()
+            .contains("sourceMeta must be an object"));
     }
 
     #[test]
@@ -2312,7 +2948,10 @@ mod tests {
         // the nested bank must itself be schemaVersion 1 compliant
         let legacy = json!({ "bankKey": "b2", "bank": { "name": "Nested", "questions": [] } });
         let err = validate_bank(&legacy).unwrap_err();
-        assert!(err.contains("missing required field: schemaVersion"), "{err}");
+        assert!(
+            err.contains("missing required field: schemaVersion"),
+            "{err}"
+        );
 
         // bankKey cannot substitute for a missing nested key
         let mut keyless = valid_bank();
@@ -2359,7 +2998,6 @@ mod tests {
 
     #[test]
     fn bank_storage_roundtrip() {
-        // roundtrip storage: re-import bumps updated_at but keeps created_at
         let conn = test_conn();
         let bank = valid_bank();
         let (key, name, payload, count) = validate_bank(&bank).unwrap();
@@ -2369,14 +3007,27 @@ mod tests {
         assert_eq!(stored.name, "Bank One");
         assert_eq!(stored.question_count, 4);
         assert_eq!(stored.payload, payload_json);
+        assert_eq!(stored.content_hash, sha256_hex(&payload_json));
         assert_eq!(stored.created_at, 1111);
         assert_eq!(stored.updated_at, 1111);
 
-        run_bank_import(&conn, &key, "Bank One v2", &payload_json, count, 2222).unwrap();
+        // Identical content is idempotent and does not force mobile/web clients
+        // to re-download the same bank.
+        run_bank_import(&conn, &key, &name, &payload_json, count, 2222).unwrap();
+        let stored = run_bank_get(&conn, &key).unwrap().unwrap();
+        assert_eq!(stored.created_at, 1111);
+        assert_eq!(stored.updated_at, 1111);
+
+        let mut changed = bank.clone();
+        changed["name"] = json!("Bank One v2");
+        let (key2, name2, payload2, count2) = validate_bank(&changed).unwrap();
+        let payload_json2 = serde_json::to_string(&payload2).unwrap();
+        run_bank_import(&conn, &key2, &name2, &payload_json2, count2, 3333).unwrap();
         let stored = run_bank_get(&conn, &key).unwrap().unwrap();
         assert_eq!(stored.name, "Bank One v2");
         assert_eq!(stored.created_at, 1111);
-        assert_eq!(stored.updated_at, 2222);
+        assert_eq!(stored.updated_at, 3333);
+        assert_ne!(stored.content_hash, sha256_hex(&payload_json));
 
         assert!(run_bank_get(&conn, "missing").unwrap().is_none());
     }

@@ -28,6 +28,9 @@ class NormalizeFilterTest(unittest.TestCase):
     def test_non_string_is_stringified(self):
         self.assertEqual(consumer.normalize_filter(42), "42")
 
+    def test_clean_filter_preserves_case(self):
+        self.assertEqual(consumer.clean_filter("  Power	Systems  "), "Power Systems")
+
 
 class IsFullyQualifiedTest(unittest.TestCase):
     def test_plain_base(self):
@@ -120,11 +123,32 @@ class DeriveConsumerKeyTest(unittest.TestCase):
         b = consumer.derive_consumer_key("chatgpt", subject="继电保护")
         self.assertNotEqual(a, b)
 
+    def test_bank_filter_preserves_case_and_gets_own_namespace(self):
+        key = consumer.derive_consumer_key("chatgpt", bank=" BankA ")
+        self.assertEqual(key, "chatgpt/bank=BankA")
+        params = consumer.derive_feed_params("chatgpt", bank=" BankA ")
+        self.assertEqual(params["bankKey"], "BankA")
+        self.assertEqual(params["consumer"], "chatgpt/bank=BankA")
+
+    def test_wrong_only_has_separate_namespace(self):
+        default = consumer.derive_consumer_key("chatgpt")
+        wrong_only = consumer.derive_consumer_key("chatgpt", include_flagged=False)
+        self.assertEqual(wrong_only, "chatgpt/flagged=0")
+        self.assertNotEqual(default, wrong_only)
+        params = consumer.derive_feed_params("chatgpt", include_flagged=False)
+        self.assertEqual(params["includeFlagged"], "false")
+
     def test_subject_with_slash_round_trips_as_fully_qualified(self):
         key = consumer.derive_consumer_key("chatgpt", subject="a/b")
-        self.assertEqual(key, "chatgpt/subject=a/b")
-        # Feeding the key back as a consumer must target the same namespace.
+        self.assertEqual(key, "chatgpt/subject=a%2Fb")
         self.assertEqual(consumer.derive_consumer_key(key), key)
+        params = consumer.derive_feed_params(key)
+        self.assertEqual(params["subject"], "a/b")
+
+    def test_percent_is_escaped_before_slash_encoding(self):
+        key = consumer.derive_consumer_key("chatgpt", subject="a%2Fb/c")
+        self.assertEqual(key, "chatgpt/subject=a%252Fb%2Fc")
+        self.assertEqual(consumer.derive_feed_params(key)["subject"], "a%2Fb/c")
 
 
 class DeriveFeedParamsTest(unittest.TestCase):
@@ -139,9 +163,15 @@ class DeriveFeedParamsTest(unittest.TestCase):
             "chapter": "第一章",
         })
 
-    def test_fully_qualified_sends_no_extra_filters(self):
-        params = consumer.derive_feed_params("chatgpt/subject=x", "y", "z")
-        self.assertEqual(params, {"consumer": "chatgpt/subject=x"})
+    def test_fully_qualified_replays_encoded_filters(self):
+        params = consumer.derive_feed_params("chatgpt/subject=x/chapter=1/bank=BankA/flagged=0")
+        self.assertEqual(params, {
+            "consumer": "chatgpt/subject=x/chapter=1/bank=BankA/flagged=0",
+            "subject": "x",
+            "chapter": "1",
+            "bankKey": "BankA",
+            "includeFlagged": "false",
+        })
 
     def test_blank_filters_omitted(self):
         params = consumer.derive_feed_params("chatgpt", "  ", None)

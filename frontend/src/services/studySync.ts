@@ -4,7 +4,7 @@
  * Records durable per-attempt data to a user-configured self-hosted study API
  * (POST {baseUrl}/api/study/attempts/batch). Practice never blocks on the
  * network: attempts are queued in a bounded localStorage outbox and flushed
- * opportunistically (after each enqueue, on `online`) or manually from the
+ * opportunistically (after enqueue, on reconnect, periodic retry, and reload) or manually from the
  * config screen. Failures simply stay pending.
  *
  * The access token is only ever attached to the Authorization header and is
@@ -40,7 +40,9 @@ export interface StudyAttemptPayload {
   idempotencyKey: string
   sessionKey: string
   deviceId: string
+  bankKey: string
   questionKey: string
+  originalQuestionId: string
   sessionQuestionId: string
   questionSnapshot: StudyQuestionSnapshot
   userAnswer: string | null
@@ -50,6 +52,7 @@ export interface StudyAttemptPayload {
   subject: string
   chapter: string
   knowledgePoint: string
+  durationMs: number
   submittedAt: number
 }
 
@@ -70,6 +73,48 @@ export interface ConnectionTestResult {
   message: string
 }
 
+export interface StudyBankSummary {
+  bankKey: string
+  name: string
+  contentHash?: string
+  questionCount: number
+  createdAt: number
+  updatedAt: number
+}
+
+export interface StudyBankQuestionDocument {
+  id?: string
+  stableKey?: string
+  type: Question['type']
+  stem: string
+  options?: string[]
+  answer: string
+  analysis: string
+  subject?: string
+  chapter?: string
+  knowledgePoint?: string
+  difficulty?: Question['difficulty']
+  tags?: string[]
+  sourceMeta?: Record<string, unknown>
+}
+
+export interface StudyBankDocument {
+  schemaVersion: number
+  key: string
+  name: string
+  version: number
+  metadata: { exam: string; outlineVersion: string; subject: string }
+  questions: StudyBankQuestionDocument[]
+  subject?: string
+  chapter?: string
+  tags?: string[]
+  sourceMeta?: Record<string, unknown>
+}
+
+export interface StudyBankEnvelope extends StudyBankSummary {
+  bank: StudyBankDocument
+}
+
 const CONFIG_KEY = 'exameow-study-sync-config'
 const DEVICE_KEY = 'exameow-study-sync-device'
 const OUTBOX_KEY = 'exameow-study-sync-outbox'
@@ -80,6 +125,7 @@ const MAX_OUTBOX_ENTRIES = 500
 /** Attempts sent per HTTP batch request */
 const BATCH_SIZE = 50
 const REQUEST_TIMEOUT_MS = 15_000
+const RETRY_INTERVAL_MS = 30_000
 
 /** Reactive state shared with the config screen */
 export const pendingCount = ref(0)
@@ -146,6 +192,13 @@ function normalizeBaseUrl(baseUrl: string): string {
   return baseUrl.trim().replace(/\/+$/, '')
 }
 
+function defaultStudyBaseUrl(): string {
+  if (typeof window === 'undefined') return ''
+  return window.location.protocol === 'http:' || window.location.protocol === 'https:'
+    ? window.location.origin
+    : ''
+}
+
 export function loadStudySyncConfig(): StudySyncConfig {
   try {
     const raw = safeGet(CONFIG_KEY)
@@ -157,7 +210,7 @@ export function loadStudySyncConfig(): StudySyncConfig {
       }
     }
   } catch {}
-  return { baseUrl: '', token: '' }
+  return { baseUrl: defaultStudyBaseUrl(), token: '' }
 }
 
 export function saveStudySyncConfig(config: StudySyncConfig) {
@@ -168,7 +221,8 @@ export function saveStudySyncConfig(config: StudySyncConfig) {
 }
 
 export function isStudySyncConfigured(): boolean {
-  return loadStudySyncConfig().baseUrl !== ''
+  const config = loadStudySyncConfig()
+  return config.baseUrl !== '' && config.token !== ''
 }
 
 /** Persistent device identifier used to distinguish Android/Web/Desktop attempt sources. */
@@ -205,13 +259,14 @@ function buildSnapshot(q: Question): StudyQuestionSnapshot {
 }
 
 /**
- * questionKey: stable identity of the underlying question.
- * Prefer question.stableKey; otherwise strip the per-session `-sN` suffix
- * added by the practice store.
+ * questionKey: stable identity of the underlying question, namespaced by
+ * the logical bank key so source-local ids cannot collide across banks.
  */
-function buildQuestionKey(q: Question): string {
-  if (q.stableKey) return q.stableKey
-  return q.id.replace(/-s\d+$/, '')
+function buildQuestionKey(session: PracticeSession, q: Question): string {
+  const bankKey = session.bankKey || session.bankId
+  const originalQuestionId = q.id.replace(/-s\d+$/, '')
+  const stableQuestionId = q.stableKey || originalQuestionId
+  return `${bankKey}:${stableQuestionId}`
 }
 
 /**
@@ -229,7 +284,9 @@ export function recordStudyAttempt(session: PracticeSession, item: PracticeSessi
     idempotencyKey: `${sessionKey}-${attemptId}`,
     sessionKey,
     deviceId: getDeviceId(),
-    questionKey: buildQuestionKey(q),
+    bankKey: session.bankKey || session.bankId,
+    questionKey: buildQuestionKey(session, q),
+    originalQuestionId: q.id.replace(/-s\d+$/, ''),
     sessionQuestionId: q.id,
     questionSnapshot: buildSnapshot(q),
     userAnswer: item.userAnswer,
@@ -239,6 +296,7 @@ export function recordStudyAttempt(session: PracticeSession, item: PracticeSessi
     subject: q.subject ?? '',
     chapter: q.chapter ?? '',
     knowledgePoint: q.knowledgePoint ?? '',
+    durationMs: Math.max(0, item.durationMs ?? 0),
     submittedAt: item.submittedAt ?? Date.now(),
   })
   triggerFlush()
@@ -419,17 +477,52 @@ export function triggerFlush() {
   void flushAttempts()
 }
 
-/**
- * Opportunistic flush when connectivity returns. No polling: the listener is
- * registered once, lazily, on first enqueue.
- */
+/** Opportunistic flush when connectivity returns. */
 let onlineListenerBound = false
 function ensureOnlineListener() {
-  if (onlineListenerBound) return
+  if (onlineListenerBound || typeof window === 'undefined') return
   onlineListenerBound = true
   window.addEventListener('online', () => {
     if (isStudySyncConfigured()) triggerFlush()
   })
+}
+
+/** Retry pending writes after transient failures even when the browser stays online. */
+let retryTimerBound = false
+function ensureRetryTimer() {
+  if (retryTimerBound || typeof window === 'undefined') return
+  retryTimerBound = true
+  window.setInterval(() => {
+    if (pendingCount.value > 0 && isStudySyncConfigured() && window.navigator.onLine) triggerFlush()
+  }, RETRY_INTERVAL_MS)
+}
+
+// ─── Remote study banks ────────────────────────────────────────────────────
+
+async function getStudyJson<T>(path: string): Promise<T> {
+  const config = loadStudySyncConfig()
+  if (!config.baseUrl) throw new Error('study sync is not configured')
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+  try {
+    const res = await fetch(joinUrl(config.baseUrl, path), {
+      headers: authHeaders(config.token, false),
+      signal: controller.signal,
+    })
+    if (!res.ok) throw new Error(`study API HTTP ${res.status}`)
+    return await res.json() as T
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+export async function listRemoteStudyBanks(): Promise<StudyBankSummary[]> {
+  const payload = await getStudyJson<{ banks?: StudyBankSummary[] }>('api/study/banks')
+  return Array.isArray(payload.banks) ? payload.banks : []
+}
+
+export async function getRemoteStudyBank(bankKey: string): Promise<StudyBankEnvelope> {
+  return getStudyJson<StudyBankEnvelope>(`api/study/banks/${encodeURIComponent(bankKey)}`)
 }
 
 // ─── Connection test ───────────────────────────────────────────────────────
@@ -447,4 +540,11 @@ export async function testStudyConnection(baseUrl: string, token: string): Promi
     return { ok: false, message: 'network error' }
   }
   return { ok: status >= 200 && status < 300, message: `HTTP ${status}` }
+}
+
+// Recover pending offline writes after a page reload without waiting for another answer.
+if (typeof window !== 'undefined') {
+  ensureOnlineListener()
+  ensureRetryTimer()
+  if (isStudySyncConfigured() && pendingCount.value > 0 && window.navigator.onLine) triggerFlush()
 }

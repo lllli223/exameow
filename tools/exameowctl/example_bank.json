@@ -2,9 +2,20 @@
   "schemaVersion": 1,
   "key": "sgcc-iot-basics-example",
   "name": "国网计算机·物联网基础示例题库",
+  "version": 1,
+  "metadata": {
+    "exam": "国家电网计算机类",
+    "outlineVersion": "2026",
+    "subject": "信息新技术"
+  },
   "subject": "信息新技术",
   "chapter": "物联网基础",
-  "tags": ["sgcc", "计算机类", "物联网", "example"],
+  "tags": [
+    "sgcc",
+    "计算机类",
+    "物联网",
+    "example"
+  ],
   "sourceMeta": {
     "origin": "exameowctl example bank",
     "generatedAt": "2026-09-09",
@@ -27,20 +38,32 @@
       "chapter": "物联网基础",
       "knowledgePoint": "RFID 射频识别",
       "difficulty": "easy",
-      "tags": ["缩写", "感知层"]
+      "tags": [
+        "缩写",
+        "感知层"
+      ]
     },
     {
       "stableKey": "sgcc-iot-example-0002",
       "type": "multi_choice",
       "stem": "下列技术中，常用于物联网感知或近距离无线接入的有（）。",
-      "options": ["RFID", "ZigBee", "Bluetooth", "NFC", "BGP"],
+      "options": [
+        "RFID",
+        "ZigBee",
+        "Bluetooth",
+        "NFC",
+        "BGP"
+      ],
       "answer": "ABCD",
       "analysis": "RFID、ZigBee、Bluetooth（蓝牙）和 NFC（Near Field Communication，近场通信）常用于感知或短距离连接；BGP（Border Gateway Protocol，边界网关协议）属于互联网域间路由协议。",
       "subject": "信息新技术",
       "chapter": "物联网基础",
       "knowledgePoint": "物联网关键通信技术",
       "difficulty": "medium",
-      "tags": ["无线通信", "辨析"]
+      "tags": [
+        "无线通信",
+        "辨析"
+      ]
     },
     {
       "stableKey": "sgcc-iot-example-0003",
@@ -68,14 +91,21 @@
       "id": "legacy-import-iot-0005",
       "type": "single_choice",
       "stem": "在典型物联网分层中，负责采集物理世界信息的主要是（）。",
-      "options": ["感知层", "网络层", "应用层", "表示层"],
+      "options": [
+        "感知层",
+        "网络层",
+        "应用层",
+        "表示层"
+      ],
       "answer": "A",
       "analysis": "感知层通过传感器、RFID 等设备获取对象状态和环境信息；网络层承担传输，应用层面向具体业务。",
       "subject": "信息新技术",
       "chapter": "物联网基础",
       "knowledgePoint": "物联网体系结构",
       "difficulty": "medium",
-      "tags": ["体系结构"]
+      "tags": [
+        "体系结构"
+      ]
     }
   ]
 }

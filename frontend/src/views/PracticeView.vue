@@ -6,6 +6,7 @@ import { useWrongQuestionsStore } from '@/stores/wrongQuestions'
 import { useConfigStore } from '@/stores/config'
 import { api } from '@/api'
 import { isCloudflare } from '@/utils/platform'
+import { isStudySyncConfigured } from '@/services/studySync'
 import { getResumedPracticeSettings, matchPracticeFilter, reconcileMockConfig, reconcileMockTypeCounts } from '@/utils/practiceFilter'
 import type { JudgeResult, ExplainResult } from '@exameow/shared'
 import { useSwipeNavigation } from '@/composables/useSwipeNavigation'
@@ -50,6 +51,7 @@ const selectedMode = ref<PracticeMode | null>(null)
 const mockConfig = ref<MockExamConfig>({ typeCounts: {} })
 const mockConfigAdjusted = ref(false)
 const showImportDialog = ref(false)
+const remoteBankSyncing = ref(false)
 const showDeleteConfirm = ref(false)
 const showClearSessionConfirm = ref(false)
 const deleteBankId = ref<string | null>(null)
@@ -189,6 +191,14 @@ onMounted(() => {
   if (practiceStore.session) {
     wrongStore.syncSession(practiceStore.session)
   }
+  // Mobile/web clients discover server-imported banks automatically when the
+  // study endpoint has been configured. This remains non-blocking/local-first.
+  if (isStudySyncConfigured()) {
+    remoteBankSyncing.value = true
+    void practiceStore.syncStudyBanks()
+      .catch(() => {})
+      .finally(() => { remoteBankSyncing.value = false })
+  }
 })
 
 watch([viewState, () => practiceStore.session], ([state]) => {
@@ -234,6 +244,7 @@ function resumeSession() {
   practiceFilter.value = settings.filter
   mockConfig.value = settings.mockConfig
   mockConfigAdjusted.value = false
+  practiceStore.resumeCurrentTimer()
   viewState.value = 'practice'
   autoAdvancing.value = false
 }
@@ -390,6 +401,19 @@ function handleImportDone(count: number) {
   showImportDialog.value = false
   if (count > 0) {
     showToast(i18n.t('practiceImportSuccess', { n: count }))
+  }
+}
+
+async function handleRemoteBankSync() {
+  if (remoteBankSyncing.value) return
+  remoteBankSyncing.value = true
+  try {
+    const result = await practiceStore.syncStudyBanks()
+    showToast(i18n.t('syncFlushed', { n: result.added + result.updated }))
+  } catch (error: any) {
+    showToast(`${i18n.t('syncTestFail')}: ${error?.message ?? String(error)}`)
+  } finally {
+    remoteBankSyncing.value = false
   }
 }
 
@@ -741,9 +765,12 @@ function handleBack() {
       <BankListCard
         :banks="sortedBanks"
         :selected-id="selectedBankId"
+        :syncing="remoteBankSyncing"
+        :sync-enabled="isStudySyncConfigured()"
         @select="selectBank"
         @delete="handleDelete"
         @import="showImportDialog = true"
+        @sync="handleRemoteBankSync"
         @manage-wrong="handleManageWrong"
       />
     </template>

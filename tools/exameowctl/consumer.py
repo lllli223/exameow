@@ -12,20 +12,33 @@ DEFAULT_CONSUMER = "chatgpt"
 
 _SUBJECT = "subject="
 _CHAPTER = "chapter="
+_BANK = "bank="
+_FLAGGED = "flagged="
 
 
-def normalize_filter(value):
-    """Canonical form for filter values.
-
-    Trim, collapse ALL whitespace (including full-width spaces) to single
-    ASCII spaces, and casefold, so the same logical filter always maps to
-    the same key regardless of quoting or casing.
-    """
+def clean_filter(value):
+    """Trim and collapse whitespace while preserving meaningful casing."""
     if value is None:
         return ""
     if not isinstance(value, str):
         value = str(value)
-    return " ".join(value.split()).casefold()
+    return " ".join(value.split())
+
+
+def normalize_filter(value):
+    """Canonical case-insensitive form used only inside consumer keys."""
+    return clean_filter(value).casefold()
+
+
+def _encode_segment(value):
+    """Escape consumer-key delimiters without making CJK keys unreadable."""
+    value = value.replace("%2f", "%2F")
+    return value.replace("%", "%25").replace("/", "%2F")
+
+
+def _decode_segment(value):
+    """Inverse of _encode_segment for fully-qualified consumer replay."""
+    return value.replace("%2F", "/").replace("%2f", "/").replace("%25", "%")
 
 
 def is_fully_qualified(consumer):
@@ -37,52 +50,65 @@ def is_fully_qualified(consumer):
     if not consumer:
         return False
     return any(
-        segment.startswith(_SUBJECT) or segment.startswith(_CHAPTER)
+        segment.startswith((_SUBJECT, _CHAPTER, _BANK, _FLAGGED))
         for segment in consumer.split("/")
     )
 
 
-def derive_consumer_key(consumer=None, subject=None, chapter=None):
-    """Derive the exact consumer key from a base consumer plus filters.
-
-    Layout (filter order is canonical, independent of flag order):
-
-        <base>                                     no filters
-        <base>/subject=<normalized subject>        --subject
-        <base>/chapter=<normalized chapter>       --chapter
-        <base>/subject=<s>/chapter=<c>             both
-
-    A fully-qualified consumer (already containing subject=/chapter=
-    segments) is returned verbatim and filters are ignored.
-    """
+def derive_consumer_key(
+    consumer=None, subject=None, chapter=None, bank=None, include_flagged=True
+):
+    """Derive the exact cursor namespace from the base consumer and filters."""
     base = (consumer or "").strip() or DEFAULT_CONSUMER
     if is_fully_qualified(base):
         return base
     parts = [base]
     normalized_subject = normalize_filter(subject)
     normalized_chapter = normalize_filter(chapter)
+    normalized_bank = clean_filter(bank)
     if normalized_subject:
-        parts.append(_SUBJECT + normalized_subject)
+        parts.append(_SUBJECT + _encode_segment(normalized_subject))
     if normalized_chapter:
-        parts.append(_CHAPTER + normalized_chapter)
+        parts.append(_CHAPTER + _encode_segment(normalized_chapter))
+    if normalized_bank:
+        parts.append(_BANK + _encode_segment(normalized_bank))
+    if not include_flagged:
+        parts.append(_FLAGGED + "0")
     return "/".join(parts)
 
 
-def derive_feed_params(consumer=None, subject=None, chapter=None):
-    """Build the request params shared by `feed` (query) and `ack` (body).
-
-    Returns a dict with 'consumer' (the exact derived key) plus the
-    normalized 'subject'/'chapter' when they were derived from flags.
-    Fully-qualified consumers already encode their filters, so no extra
-    filter params are sent in that case.
-    """
+def derive_feed_params(
+    consumer=None, subject=None, chapter=None, bank=None, include_flagged=True
+):
+    """Build feed query params and the matching ACK consumer namespace."""
     base = (consumer or "").strip() or DEFAULT_CONSUMER
-    params = {"consumer": derive_consumer_key(base, subject, chapter)}
-    if not is_fully_qualified(base):
-        normalized_subject = normalize_filter(subject)
-        normalized_chapter = normalize_filter(chapter)
-        if normalized_subject:
-            params["subject"] = normalized_subject
-        if normalized_chapter:
-            params["chapter"] = normalized_chapter
+    if is_fully_qualified(base):
+        params = {"consumer": base}
+        for segment in base.split("/"):
+            if segment.startswith(_SUBJECT):
+                params["subject"] = _decode_segment(segment[len(_SUBJECT):])
+            elif segment.startswith(_CHAPTER):
+                params["chapter"] = _decode_segment(segment[len(_CHAPTER):])
+            elif segment.startswith(_BANK):
+                params["bankKey"] = _decode_segment(segment[len(_BANK):])
+            elif segment == _FLAGGED + "0":
+                params["includeFlagged"] = "false"
+        return params
+
+    params = {
+        "consumer": derive_consumer_key(
+            base, subject, chapter, bank, include_flagged
+        )
+    }
+    cleaned_subject = clean_filter(subject)
+    cleaned_chapter = clean_filter(chapter)
+    cleaned_bank = clean_filter(bank)
+    if cleaned_subject:
+        params["subject"] = cleaned_subject
+    if cleaned_chapter:
+        params["chapter"] = cleaned_chapter
+    if cleaned_bank:
+        params["bankKey"] = cleaned_bank
+    if not include_flagged:
+        params["includeFlagged"] = "false"
     return params
