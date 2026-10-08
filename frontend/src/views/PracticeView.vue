@@ -204,6 +204,9 @@ onMounted(() => {
     remoteBankSyncing.value = true
     void practiceStore.syncStudyBanks()
       .catch(() => {})
+      .then(() => Promise.allSettled(
+        practiceStore.banks.map(bank => wrongStore.restoreLegacyServerFlags(bank.id)),
+      ))
       .finally(() => { remoteBankSyncing.value = false })
   }
   // Returning from "Learn with AI" should open the session at the current question.
@@ -426,6 +429,7 @@ async function handleRemoteBankSync() {
   remoteBankSyncing.value = true
   try {
     const result = await practiceStore.syncStudyBanks()
+    await Promise.allSettled(practiceStore.banks.map(bank => wrongStore.restoreLegacyServerFlags(bank.id)))
     showToast(i18n.t('syncFlushed', { n: result.added + result.updated }))
   } catch (error: any) {
     showToast(`${i18n.t('syncTestFail')}: ${error?.message ?? String(error)}`)
@@ -1022,7 +1026,7 @@ function handleBack() {
     <!-- Wrong Questions Sort Dialog -->
     <WrongQuestionsSortDialog
       v-if="showWrongSortDialog"
-      :wrong-count="selectedBankId ? wrongStore.getWrongCount(selectedBankId) : 0"
+      :review-count="selectedBankId ? wrongStore.getWrongCount(selectedBankId) : 0"
       @start="handleStartWrongPractice"
       @close="showWrongSortDialog = false"
     />

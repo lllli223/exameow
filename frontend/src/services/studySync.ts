@@ -115,6 +115,13 @@ export interface StudyBankEnvelope extends StudyBankSummary {
   bank: StudyBankDocument
 }
 
+/** Previously submitted unsure flags, preserved in the server review-event feed. */
+export interface LegacyStudyFlag {
+  originalQuestionId: string
+  questionKey: string
+  submittedAt: number
+}
+
 const CONFIG_KEY = 'exameow-study-sync-config'
 const DEVICE_KEY = 'exameow-study-sync-device'
 const OUTBOX_KEY = 'exameow-study-sync-outbox'
@@ -347,6 +354,64 @@ function authHeaders(token: string, json = true): Record<string, string> {
   if (json) headers['Content-Type'] = 'application/json'
   if (token) headers['Authorization'] = `Bearer ${token}`
   return headers
+}
+
+/**
+ * One-time restoration of flags created before the browser kept its own
+ * durable review index. Use the existing read-only feed with an explicit
+ * cursor, never ACK and never touch another consumer's progress.
+ */
+export async function listLegacyStudyFlags(bankKey: string): Promise<LegacyStudyFlag[]> {
+  const config = loadStudySyncConfig()
+  if (!config.baseUrl || !config.token) throw new Error('Study sync is not configured')
+  const flagged = new Map<string, LegacyStudyFlag>()
+  let after = 0
+  const pageSize = 500
+  for (let page = 0; page < 50; page++) {
+    const params = new URLSearchParams({
+      consumer: 'exameow-web-legacy-flag-import',
+      after: String(after),
+      bankKey,
+      includeFlagged: 'true',
+      limit: String(pageSize),
+    })
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+    let body: unknown
+    try {
+      const response = await fetch(`${joinUrl(config.baseUrl, 'api/study/feed')}?${params}`, {
+        headers: authHeaders(config.token, false),
+        signal: controller.signal,
+      })
+      if (!response.ok) throw new Error(`Study review history HTTP ${response.status}`)
+      body = await response.json()
+    } finally {
+      clearTimeout(timer)
+    }
+    const result = body as {
+      attempts?: { originalQuestionId?: string; questionKey?: string; submittedAt?: number; flagged?: boolean }[]
+      nextCursor?: number
+    }
+    if (!Array.isArray(result?.attempts) || !Number.isSafeInteger(result.nextCursor)) {
+      throw new Error('Invalid study review history response')
+    }
+    for (const attempt of result.attempts) {
+      if (!attempt.flagged || !attempt.questionKey || !attempt.originalQuestionId) continue
+      if (!attempt.questionKey.startsWith(`${bankKey}:`)) continue
+      const previous = flagged.get(attempt.questionKey)
+      if (!previous || (attempt.submittedAt ?? 0) >= previous.submittedAt) {
+        flagged.set(attempt.questionKey, {
+          originalQuestionId: attempt.originalQuestionId,
+          questionKey: attempt.questionKey,
+          submittedAt: attempt.submittedAt ?? 0,
+        })
+      }
+    }
+    if (result.attempts.length < pageSize) return [...flagged.values()]
+    if (result.nextCursor! <= after) throw new Error('Study review history cursor did not advance')
+    after = result.nextCursor!
+  }
+  throw new Error('Study review history is too large to import safely')
 }
 
 /** POST one batch; returns the HTTP status, or null on network error/timeout */

@@ -64,6 +64,10 @@ export interface WrongQuestionEntry {
   consecutiveCorrect: number
   lastWrongAt: number
   addedAt: number
+  /** Explicit "unsure / review" mark, independent of whether the answer was wrong. */
+  flagged?: boolean
+  /** Last time the user manually marked this question for review. */
+  flaggedAt?: number
 }
 
 export interface MockExamConfig {

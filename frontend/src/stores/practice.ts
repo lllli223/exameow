@@ -11,6 +11,7 @@ import {
 import { analyzeCSV, analyzeExcel, parseWithMapping } from '@/utils/importParser'
 import type { ColumnMapping, ImportAnalysis } from '@/utils/importParser'
 import { usePracticeHistoryStore } from '@/stores/practiceHistory'
+import { useWrongQuestionsStore } from '@/stores/wrongQuestions'
 import { matchPracticeFilter, reconcileMockConfig } from '@/utils/practiceFilter'
 import { gradeTrueFalseAnswer } from '@/utils/answerGrading'
 
@@ -287,11 +288,13 @@ export const usePracticeStore = defineStore('practice', () => {
     if (questions.length === 0) return false
 
     const startedAt = Date.now()
+    const reviewStore = useWrongQuestionsStore()
     const sessionQuestions: PracticeSessionItem[] = questions.map((q, i) => ({
       question: { ...q, id: `${q.id}-s${i}` },
       userAnswer: null as string | null,
       isCorrect: null as boolean | null,
       submitted: false,
+      flagged: reviewStore.getWrongEntry(bankId, q.id)?.flagged === true,
       attemptId: generateId(),
       durationMs: 0,
       viewStartedAt: i === 0 ? startedAt : undefined,
@@ -417,10 +420,30 @@ export const usePracticeStore = defineStore('practice', () => {
     if (!item) return
     ensureSyncMeta()
     item.flagged = !item.flagged
+    const originalId = item.question.id.replace(/-s\d+$/, '')
+    useWrongQuestionsStore().setFlagged(s.bankId, originalId, item.flagged)
     saveSession(s)
     if (item.submitted) {
       recordStudyAttempt(s, item)
     }
+  }
+
+  /** Explicit removal from the review book also clears stale session flags. */
+  function clearSessionReviewFlag(bankId: string, questionId?: string) {
+    const s = session.value
+    if (!s || s.bankId !== bankId) return
+    let changed = false
+    for (const item of s.questions) {
+      const originalId = item.question.id.replace(/-s\d+$/, '')
+      if (!item.flagged || (questionId && originalId !== questionId)) continue
+      item.flagged = false
+      changed = true
+      if (item.submitted) {
+        ensureSyncMeta()
+        recordStudyAttempt(s, item)
+      }
+    }
+    if (changed) saveSession(s)
   }
 
   function saveAiAnalysis(questionId: string, text: string) {
@@ -666,6 +689,7 @@ export const usePracticeStore = defineStore('practice', () => {
     submitAnswer,
     selfCheck,
     toggleFlagCurrent,
+    clearSessionReviewFlag,
     saveAiAnalysis,
     nextQuestion,
     prevQuestion,

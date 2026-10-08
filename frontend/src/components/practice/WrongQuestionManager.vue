@@ -4,6 +4,7 @@ import { useI18nStore } from '@/stores/i18n'
 import { usePracticeStore } from '@/stores/practice'
 import { useWrongQuestionsStore } from '@/stores/wrongQuestions'
 import type { WrongSort, WrongQuestionEntry } from '@exameow/shared'
+import { isReviewEntry, reviewActivityAt, sortReviewEntries } from '@/utils/reviewEntries'
 import {
   ArrowDownIcon,
   ArrowUpIcon,
@@ -32,16 +33,10 @@ const showClearConfirm = ref(false)
 const bank = computed(() => practiceStore.getBank(props.bankId))
 const entries = computed(() => {
   const map = wrongStore.getBankEntryMap(props.bankId)
-  return Object.values(map)
-    .filter(e => bank.value?.questions.some(q => q.id === e.questionId))
-    .sort((a, b) => {
-      switch (sort.value) {
-        case 'count-desc': return b.wrongCount - a.wrongCount
-        case 'count-asc': return a.wrongCount - b.wrongCount
-        case 'time-desc': return b.lastWrongAt - a.lastWrongAt
-        case 'time-asc': return a.lastWrongAt - b.lastWrongAt
-      }
-    })
+  return sortReviewEntries(
+    Object.values(map).filter(e => isReviewEntry(e) && bank.value?.questions.some(q => q.id === e.questionId)),
+    sort.value,
+  )
 })
 
 function getQuestionStem(entry: WrongQuestionEntry): string {
@@ -81,7 +76,7 @@ const sortOptions: { value: WrongSort; label: string; icon: any }[] = [
             {{ i18n.t('wrongManagerTitle') }} - {{ bank?.name ?? '' }}
           </div>
           <div class="text-body-sm" :style="{ color: 'rgb(var(--md-on-surface-variant))' }">
-            {{ entries.length }} {{ i18n.t('wrongCount') }}
+            {{ i18n.t('practiceQuestionUnit', { n: entries.length }) }}
           </div>
         </div>
         <button class="btn-icon !w-8 !h-8" @click="emit('close')">
@@ -135,13 +130,16 @@ const sortOptions: { value: WrongSort; label: string; icon: any }[] = [
                 {{ getQuestionStem(entry) }}
               </div>
               <div class="flex items-center gap-3 mt-1.5 text-xs" :style="{ color: 'rgb(var(--md-on-surface-variant))' }">
-                <span class="flex items-center gap-1">
+                <span v-if="entry.wrongCount > 0" class="flex items-center gap-1">
                   <ExclamationTriangleIcon class="w-3 h-3" :style="{ color: 'rgb(var(--md-error))' }" />
                   {{ i18n.t('wrongTimesCount', { n: entry.wrongCount }) }}
                 </span>
+                <span v-if="entry.flagged" class="flex items-center gap-1" style="color: rgb(var(--md-primary))">
+                  {{ i18n.t('practiceFlagUncertain') }}
+                </span>
                 <span class="flex items-center gap-1">
                   <ClockIcon class="w-3 h-3" />
-                  {{ formatDate(entry.lastWrongAt) }}
+                  {{ formatDate(reviewActivityAt(entry)) }}
                 </span>
               </div>
             </div>

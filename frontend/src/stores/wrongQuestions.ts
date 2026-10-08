@@ -2,6 +2,8 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import type { WrongQuestionEntry, WrongSort, Question, PracticeSession } from '@exameow/shared'
 import { usePracticeStore } from './practice'
+import { listLegacyStudyFlags } from '@/services/studySync'
+import { isReviewEntry, recordReviewCorrect, setReviewFlag, sortReviewEntries } from '@/utils/reviewEntries'
 
 const STORAGE_KEY = 'exameow-wrong-questions'
 
@@ -49,45 +51,60 @@ export const useWrongQuestionsStore = defineStore('wrongQuestions', () => {
   }
 
   function recordCorrect(bankId: string, questionId: string): boolean {
-    if (!data.value[bankId]?.[questionId]) return false
-    const entry = data.value[bankId]![questionId]!
-    entry.consecutiveCorrect++
-    if (entry.consecutiveCorrect >= 3) {
+    const entry = data.value[bankId]?.[questionId]
+    if (!entry || entry.wrongCount <= 0) return false
+    const result = recordReviewCorrect(entry)
+    if (result.entry) {
+      data.value[bankId]![questionId] = result.entry
+    } else {
       delete data.value[bankId]![questionId]
-      if (Object.keys(data.value[bankId]!).length === 0) {
-        delete data.value[bankId]
-      }
-      save()
-      return true
+      if (Object.keys(data.value[bankId]!).length === 0) delete data.value[bankId]
     }
     save()
-    return false
+    return result.removedFromReview
+  }
+
+  /** Keep manually marked questions in the retry pool without counting an error. */
+  function setFlagged(bankId: string, questionId: string, flagged: boolean, at = Date.now()) {
+    const existing = data.value[bankId]?.[questionId]
+    if (existing?.flagged === flagged || (!existing && !flagged)) return
+    const updated = setReviewFlag(existing, questionId, flagged, at)
+    if (updated) {
+      if (!data.value[bankId]) data.value[bankId] = {}
+      data.value[bankId]![questionId] = updated
+    } else if (data.value[bankId]) {
+      delete data.value[bankId]![questionId]
+      if (Object.keys(data.value[bankId]!).length === 0) delete data.value[bankId]
+    }
+    save()
   }
 
   function removeWrong(bankId: string, questionId: string) {
     if (!data.value[bankId]?.[questionId]) return
     delete data.value[bankId]![questionId]
-    if (Object.keys(data.value[bankId]!).length === 0) {
-      delete data.value[bankId]
-    }
+    if (Object.keys(data.value[bankId]!).length === 0) delete data.value[bankId]
     save()
+    // Prevent the restored session from re-importing a deliberately removed flag.
+    usePracticeStore().clearSessionReviewFlag(bankId, questionId)
   }
 
   function clearBank(bankId: string) {
+    if (!data.value[bankId]) return
     delete data.value[bankId]
     save()
+    usePracticeStore().clearSessionReviewFlag(bankId)
   }
 
   function hasWrongQuestions(bankId: string): boolean {
     const bank = data.value[bankId]
     if (!bank) return false
-    return Object.keys(bank).length > 0
+    return Object.values(bank).some(isReviewEntry)
   }
 
   function getWrongCount(bankId: string): number {
     const bank = data.value[bankId]
     if (!bank) return 0
-    return Object.keys(bank).length
+    return Object.values(bank).filter(isReviewEntry).length
   }
 
   function getWrongEntry(bankId: string, questionId: string): WrongQuestionEntry | null {
@@ -106,18 +123,7 @@ export const useWrongQuestionsStore = defineStore('wrongQuestions', () => {
     const entries = data.value[bankId]
     if (!entries) return []
 
-    const sorted = Object.values(entries).sort((a, b) => {
-      switch (sort) {
-        case 'count-desc':
-          return b.wrongCount - a.wrongCount
-        case 'count-asc':
-          return a.wrongCount - b.wrongCount
-        case 'time-desc':
-          return b.lastWrongAt - a.lastWrongAt
-        case 'time-asc':
-          return a.lastWrongAt - b.lastWrongAt
-      }
-    })
+    const sorted = sortReviewEntries(Object.values(entries).filter(isReviewEntry), sort)
 
     return sorted
       .map(entry => bank.questions.find(q => q.id === entry.questionId))
@@ -126,24 +132,63 @@ export const useWrongQuestionsStore = defineStore('wrongQuestions', () => {
 
   function syncSession(session: PracticeSession) {
     const bankId = session.bankId
+    let changed = false
     for (const item of session.questions) {
-      if (item.isCorrect === false) {
-        const originalId = item.question.id.replace(/-s\d+$/, '')
-        if (!data.value[bankId]) {
-          data.value[bankId] = {}
+      const originalId = item.question.id.replace(/-s\d+$/, '')
+      const existing = data.value[bankId]?.[originalId]
+      // Repair legacy sessions that were not yet reflected in the local review book.
+      if (item.isCorrect === false && (!existing || !isReviewEntry(existing))) {
+        if (!data.value[bankId]) data.value[bankId] = {}
+        data.value[bankId]![originalId] = {
+          questionId: originalId,
+          wrongCount: 1,
+          consecutiveCorrect: 0,
+          lastWrongAt: Date.now(),
+          addedAt: Date.now(),
+          flagged: existing?.flagged,
+          flaggedAt: existing?.flaggedAt,
         }
-        if (!data.value[bankId]![originalId]) {
-          data.value[bankId]![originalId] = {
-            questionId: originalId,
-            wrongCount: 1,
-            consecutiveCorrect: 0,
-            lastWrongAt: Date.now(),
-            addedAt: Date.now(),
-          }
+        changed = true
+      }
+      // Upgrade a marked-only question from an older saved session once.
+      if (item.flagged === true && data.value[bankId]?.[originalId]?.flagged !== true) {
+        const updated = setReviewFlag(data.value[bankId]?.[originalId], originalId, true)
+        if (updated) {
+          if (!data.value[bankId]) data.value[bankId] = {}
+          data.value[bankId]![originalId] = updated
+          changed = true
         }
       }
     }
-    save()
+    if (changed) save()
+  }
+
+  /**
+   * Recover pre-upgrade manual marks stored on the self-hosted server.
+   * This is an intentionally one-time read-only migration, not a recurring
+   * feed consumer: unmarking locally must not re-import old flagged attempts.
+   */
+  async function restoreLegacyServerFlags(bankId: string): Promise<number> {
+    const bank = usePracticeStore().getBank(bankId)
+    if (!bank) return 0
+    const bankKey = bank.remoteKey ?? bank.id
+    const migrationKey = `exameow-legacy-unsure-restored:${encodeURIComponent(bankKey)}`
+    if (localStorage.getItem(migrationKey) === '1') return 0
+
+    const oldMarks = await listLegacyStudyFlags(bankKey)
+    const byId = new Map(bank.questions.map(q => [q.id, q]))
+    const byStableKey = new Map(bank.questions
+      .filter(q => q.stableKey)
+      .map(q => [`${bankKey}:${q.stableKey}`, q]))
+    let restored = 0
+    for (const mark of oldMarks) {
+      const question = byId.get(mark.originalQuestionId) ?? byStableKey.get(mark.questionKey)
+      if (!question || data.value[bankId]?.[question.id]?.flagged === true) continue
+      setFlagged(bankId, question.id, true, mark.submittedAt || Date.now())
+      restored++
+    }
+    localStorage.setItem(migrationKey, '1')
+    return restored
   }
 
   function getAllWrongBanks(): { bankId: string; entries: WrongQuestionEntry[] }[] {
@@ -161,6 +206,7 @@ export const useWrongQuestionsStore = defineStore('wrongQuestions', () => {
     data,
     recordWrong,
     recordCorrect,
+    setFlagged,
     removeWrong,
     clearBank,
     hasWrongQuestions,
@@ -170,5 +216,6 @@ export const useWrongQuestionsStore = defineStore('wrongQuestions', () => {
     getWrongQuestions,
     getAllWrongBanks,
     syncSession,
+    restoreLegacyServerFlags,
   }
 })

@@ -11,7 +11,7 @@ import {
 } from '@heroicons/vue/24/outline'
 
 const props = defineProps<{
-  wrongCount: number
+  reviewCount: number
 }>()
 
 const emit = defineEmits<{
@@ -46,7 +46,7 @@ const selected = ref<WrongSort>('count-desc')
             {{ i18n.t('wrongModeTitle') }}
           </div>
           <div class="text-body-sm" :style="{ color: 'rgb(var(--md-on-surface-variant))' }">
-            {{ wrongCount }} {{ i18n.t('wrongCount') }}
+            {{ i18n.t('practiceQuestionUnit', { n: reviewCount }) }}
           </div>
         </div>
       </div>

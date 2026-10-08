@@ -11,6 +11,7 @@
     "preview": "vite preview",
     "build-only": "vite build",
     "type-check": "vue-tsc --build",
+    "test:review": "node --test scripts/test-review-entries.mts && node scripts/test-marked-retry.mjs",
     "tauri": "tauri"
   },
   "dependencies": {
