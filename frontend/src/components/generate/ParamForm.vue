@@ -4,6 +4,7 @@ import { useI18nStore } from '@/stores/i18n'
 import { SUPPORTED_LOCALES } from '@/i18n/locales'
 import { QuestionType, Difficulty } from '@exameow/shared'
 import BaseSelect from '@/components/common/BaseSelect.vue'
+import BaseSwitch from '@/components/common/BaseSwitch.vue'
 import { ChartBarIcon, LanguageIcon } from '@heroicons/vue/24/outline'
 
 const store = useExamStore()
@@ -128,6 +129,27 @@ function toggleType(type: QuestionType) {
           class="input-outlined text-sm !py-3 !rounded-xl"
         />
       </div>
+
+      <div class="col-span-2">
+        <label class="text-label-md font-semibold tracking-wide block mb-2" style="color: rgb(var(--md-on-surface-variant))">{{ i18n.t('genExtraPrompt') }}</label>
+        <textarea
+          v-model="store.extraPrompt"
+          :placeholder="i18n.t('genExtraPromptPlaceholder')"
+          rows="3"
+          class="input-outlined text-sm !py-3 !rounded-xl w-full resize-y"
+        ></textarea>
+      </div>
+    </div>
+    <div class="flex items-start justify-between gap-4 mt-5">
+      <div
+        class="select-none"
+        :class="store.generating ? 'opacity-40 pointer-events-none' : 'cursor-pointer'"
+        @click="store.autoChapter = !store.autoChapter"
+      >
+        <span class="text-label-md font-semibold block">{{ i18n.t('genAutoChapter') }}</span>
+        <span class="block text-body-sm mt-1" style="color: rgb(var(--md-on-surface-variant))">{{ i18n.t('genAutoChapterHint') }}</span>
+      </div>
+      <BaseSwitch v-model="store.autoChapter" :disabled="store.generating" :aria-label="i18n.t('genAutoChapter')" />
     </div>
   </div>
 </template>

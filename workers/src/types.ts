@@ -32,10 +32,25 @@ export interface ExamParams {
   difficulty: Difficulty
   language: string
   topic_filter?: string
+  auto_chapter?: boolean
+  chapter_names?: string[]
   text?: string
   batch_index?: number
   batch_total?: number
   source_name?: string
+  custom_prompt?: string
+  max_tokens?: number
+}
+
+export interface AIRequestOptions {
+  max_tokens?: number
+  token_parameter?: string
+  temperature?: number
+  omit_temperature?: boolean
+  reasoning_effort?: string
+  extra_prompt?: string
+  retries?: number
+  timeout_seconds?: number
 }
 
 export interface AIConfigData {
@@ -43,6 +58,23 @@ export interface AIConfigData {
   api_key?: string
   model: string
 }
+
+// Free-plan guards: every value here bounds attacker-controlled cost on the public demo Worker.
+export const MAX_OUTPUT_TOKENS = 8192
+export const MAX_JSON_BODY_BYTES = 256 * 1024
+export const MAX_JSON_EXPORT_BYTES = 4 * 1024 * 1024
+export const MAX_REQUEST_BYTES = 24 * 1024 * 1024
+export const MAX_UPLOAD_BYTES = 20 * 1024 * 1024
+export const MAX_DOC_TEXT_CHARS = 32000
+export const MAX_QUESTIONS_PER_REQUEST = 50
+export const MAX_PROMPT_CHARS = 4000
+export const MAX_USER_PROMPT_CHARS = 64000
+export const MAX_STEM_CHARS = 20000
+export const MAX_ANSWER_CHARS = 8000
+export const MAX_EXAM_PAYLOAD_BYTES = 1_800_000
+export const MAX_EXAM_RESULTS = 500
+export const MAX_STUDENT_NAME_CHARS = 50
+export const MAX_ANSWERS_BYTES = 64 * 1024
 
 export const AVAILABLE_CF_MODELS = [
   { id: '@cf/meta/llama-4-scout-17b-16e-instruct', name: 'Llama 4 Scout 17B' },
@@ -75,6 +107,17 @@ export interface JudgeResult {
 export interface ExplainResult {
   explanation: string
 }
+
+export interface ChatMessage {
+  role: 'system' | 'user' | 'assistant'
+  content: string
+}
+
+export interface ChatResult {
+  reply: string
+}
+
+export const MAX_CHAT_MESSAGES = 40
 
 export const DEFAULT_MODEL = '@cf/openai/gpt-oss-120b'
 

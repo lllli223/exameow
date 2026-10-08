@@ -3,11 +3,13 @@ import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18nStore } from '@/stores/i18n'
 import type { Question, PracticeMode } from '@exameow/shared'
+import { trueFalseOption } from '@/utils/answerGrading'
 import {
   CheckCircleIcon,
   XCircleIcon,
   XMarkIcon,
   SparklesIcon,
+  ChatBubbleLeftRightIcon,
 } from '@heroicons/vue/24/outline'
 
 const props = defineProps<{
@@ -37,6 +39,7 @@ const emit = defineEmits<{
   (e: 'aiJudge'): void
   (e: 'aiCancel'): void
   (e: 'aiExplain'): void
+  (e: 'aiAsk'): void
   (e: 'regrade', correct: boolean): void
 }>()
 
@@ -71,11 +74,8 @@ const optionLabels = 'ABCDEFGH'.split('')
 
 const correctAnswerSet = computed(() => {
   if (props.question.type === 'true_false') {
-    const a = props.question.answer.trim()
-    const isTrue = ['A', '√', '对', '正确', 'TRUE', 'T', '是', 'YES', 'Y', '1'].some(
-      v => a.toUpperCase() === v.toUpperCase() || a.includes(v)
-    )
-    return new Set<string>(isTrue ? ['A'] : ['B'])
+    const option = trueFalseOption(props.question.answer)
+    return new Set<string>(option ? [option] : [])
   }
   return new Set(props.question.answer.trim().toUpperCase().replace(/[^A-H]/g, '').split(''))
 })
@@ -591,6 +591,15 @@ function getBadgeStyle(opt: string) {
             >
               <SparklesIcon class="w-3.5 h-3.5" />
               {{ question.aiAnalysis ? i18n.t('practiceAiRegenerate') : i18n.t('practiceAiExplain') }}
+            </button>
+            <button
+              v-if="!aiExplaining"
+              class="btn-tonal !h-7 !px-3 text-xs shrink-0"
+              :disabled="!aiConfigured"
+              @click="emit('aiAsk')"
+            >
+              <ChatBubbleLeftRightIcon class="w-3.5 h-3.5" />
+              {{ i18n.t('learnAskAi') }}
             </button>
           </div>
         </div>

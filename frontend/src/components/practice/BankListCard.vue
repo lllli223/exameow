@@ -137,7 +137,7 @@ async function handleDownloadTemplate() {
           '正确答案': 'A',
           '解析': 'Exameow 兼容所有 OpenAI 格式的 API，支持对接任何 OpenAI 兼容的服务商。',
           '学科': '',
-          '章节': '',
+          '章节': '第一章 基础',
           '难度': '',
         }
       : {
@@ -154,7 +154,7 @@ async function handleDownloadTemplate() {
           'Answer': 'A',
           'Analysis': 'Exameow works with any OpenAI-compatible API provider.',
           'Subject': '',
-          'Chapter': '',
+          'Chapter': 'Chapter 1 Basics',
           'Difficulty': '',
         }
     const ws = XLSX.utils.json_to_sheet([sample])
@@ -354,7 +354,7 @@ const hasExportMessage = computed(() => templateExportSuccess.value || templateE
           <Transition name="scale">
             <div
               v-if="exportMenuFor === bank.id"
-              class="absolute left-0 bottom-full mb-1 z-20 rounded-xl overflow-hidden elevation-2 min-w-[96px]"
+              class="absolute left-0 bottom-full mb-1 z-20 rounded-xl overflow-hidden elevation-2 min-w-[148px]"
               :style="{ backgroundColor: 'rgb(var(--md-surface-container-high))' }"
             >
               <button
@@ -370,6 +370,13 @@ const hasExportMessage = computed(() => templateExportSuccess.value || templateE
                 @click.stop="handleExportBank(bank, 'csv')"
               >
                 CSV
+              </button>
+              <button
+                class="w-full px-4 py-2 text-left text-sm hover:bg-[rgb(var(--md-primary)/0.08)] transition-colors"
+                :style="{ color: 'rgb(var(--md-on-surface))' }"
+                @click.stop="handleExportBank(bank, 'word')"
+              >
+                Word 试卷+答案
               </button>
             </div>
           </Transition>

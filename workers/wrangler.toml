@@ -9,6 +9,9 @@ routes = [
 
 [vars]
 CF_ACCOUNT_ID = "25fcdd133593b796985d219a18c94732"
+# Extra browser origins allowed to call this Worker, comma separated. The app's own origins,
+# Tauri webviews and localhost dev servers are always allowed.
+ALLOWED_ORIGINS = ""
 
 [ai]
 binding = "AI"

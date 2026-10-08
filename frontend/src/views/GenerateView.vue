@@ -170,6 +170,20 @@ async function handleShare() {
       </div>
     </Transition>
 
+    <!-- Shortfall warning -->
+    <Transition name="scale">
+      <div
+        v-if="examStore.summary && !examStore.generating"
+        class="card-filled p-4 mb-6 border"
+        style="background-color: rgba(var(--md-error) / 0.06); border-color: rgb(var(--md-error))"
+      >
+        <p class="text-body-md font-semibold mb-1" style="color: rgb(var(--md-error))">{{ i18n.t('genShortfallTitle') }}</p>
+        <p class="text-body-md" style="color: rgb(var(--md-on-surface-variant))">
+          {{ i18n.t('genShortfallBody', { generated: examStore.summary.generated, skipped: examStore.summary.skipped }) }}
+        </p>
+      </div>
+    </Transition>
+
     <!-- Generate Button -->
     <AiConfigNotice v-if="!configStore.configured" class="max-w-md mx-auto mb-4" />
     <div class="flex flex-wrap items-center justify-center gap-2">

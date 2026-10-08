@@ -8,6 +8,7 @@ import { useI18nStore } from './i18n'
 import type { ParseProgressReport } from '@/utils/fileParser'
 import { isTauri, isCloudflare } from '@/utils/platform'
 import { tagQuestions } from '@/utils/questionMetadata'
+import { computeBatchSpecs, splitTextChunk } from '@/utils/chunking'
 
 const ALL_TYPES: QuestionType[] = [
   'single_choice' as QuestionType,
@@ -25,11 +26,14 @@ export const useExamStore = defineStore('exam', () => {
   const difficulty = ref<Difficulty>('medium' as Difficulty)
   const language = ref('zh-CN')
   const topicFilter = ref('')
+  const autoChapter = ref(false)
   const subject = ref('')
   const questions = ref<Question[]>(loadCachedQuestions())
   const sourceFileName = ref(loadCachedSourceFile())
   const generating = ref(false)
   const error = ref<string | null>(null)
+  const extraPrompt = ref('')
+  const summary = ref<{ requested: number; generated: number; skipped: number } | null>(null)
   const progress = ref({ current: 0, total: 0, message: '', phase: 'parsing' as ProgressPhase })
   let abortController: AbortController | null = null
   const generated = computed(() => questions.value.length > 0)
@@ -49,222 +53,30 @@ export const useExamStore = defineStore('exam', () => {
       difficulty: difficulty.value,
       language: language.value,
       topic_filter: topicFilter.value || undefined,
+      auto_chapter: autoChapter.value,
     }
   }
 
   type ProgressPhase = 'parsing' | 'generating' | 'complete' | 'cancelled'
 
-  const MAX_CHARS_PER_CHUNK = 32000
-  const MAX_Q_PER_CHUNK = 15
-  const TABLE_SEP_RE = /^\|(\s*:?-{3,}:?\s*\|)+$/
-
-  function chunkTextBySize(text: string, chunkCount: number): string[] {
-    let paragraphs = text.split(/\n\n+/).filter((p) => p.trim().length > 10)
-    let lineMode = false
-    if (paragraphs.some(p => p.length > MAX_CHARS_PER_CHUNK) || paragraphs.length < chunkCount) {
-      paragraphs = text.split(/\n+/).filter((p) => {
-        const t = p.trim()
-        return t.length > 10 || (t.startsWith('|') && t.length > 2)
-      })
-      lineMode = true
-    }
-    if (paragraphs.length === 0 || chunkCount <= 1) return [text]
-
-    // For each paragraph, the table header context (### heading + header row + separator)
-    // to prepend if a new chunk starts on that paragraph. Null when not inside a table.
-    let heading = ''
-    let tableHeader: string | null = null
-    const contexts: (string | null)[] = paragraphs.map((p, i) => {
-      const t = p.trim()
-      if (t.startsWith('#')) {
-        heading = t
-        tableHeader = null
-        return null
-      }
-      if (t.startsWith('|')) {
-        if (TABLE_SEP_RE.test(t)) return null
-        if (tableHeader === null) {
-          const next = paragraphs[i + 1]?.trim() ?? ''
-          if (TABLE_SEP_RE.test(next)) {
-            tableHeader = (heading ? heading + '\n\n' : '') + t + '\n' + next
-          }
-          return null
-        }
-        return tableHeader
-      }
-      tableHeader = null
-      return null
-    })
-
-    const targetSize = Math.ceil(text.length / chunkCount)
-    const chunks: string[] = []
-    let current = ''
-    const sep = lineMode ? '\n' : '\n\n'
-
-    for (let i = 0; i < paragraphs.length; i++) {
-      const para = paragraphs[i]!
-      if (current.length + para.length > targetSize && current.length > 0 && chunks.length < chunkCount - 1) {
-        chunks.push(current.trim())
-        current = contexts[i] ? contexts[i] + '\n' + para : para
-      } else {
-        current += (current ? sep : '') + para
-      }
-    }
-    if (current.trim()) chunks.push(current.trim())
-    if (chunks.length === 0) return [text]
-    return chunks
-  }
-
   function buildBatches(baseParams: ExamParams): ExamParams[] {
-    const typeEntries = Object.entries(baseParams.type_counts || {}).filter(([, count]) => count > 0)
-    if (typeEntries.length === 0) return [{ ...baseParams }]
-
-    const totalQ = typeEntries.reduce((s, [, c]) => s + c, 0)
-    const fullText = baseParams.text || ''
-
-    const chunkCount = Math.max(1, Math.ceil(totalQ / MAX_Q_PER_CHUNK))
-
-    if (chunkCount <= 1) return [{ ...baseParams }]
-
-    const fileSections = splitByFileSections(fullText)
-    console.log('[Exameow] File sections:', fileSections.length, '| sizes:', fileSections.map(s => s.label + ':' + s.text.length).join(', '))
-    const textChunks = chunkByFileProportion(fileSections, chunkCount, fullText)
-    console.log('[Exameow] Chunks (should = chunkCount =', chunkCount, '):', textChunks.length, '| labels:', textChunks.map(c => c.substring(0, 50).replace(/\n/g, '\\n')).join(' | '))
-    const remaining: Record<string, number> = {}
-    for (const [k, v] of typeEntries) remaining[k] = v
-
-    const chunks = textChunks
-    const batches: ExamParams[] = []
-    for (let i = 0; i < chunks.length && Object.values(remaining).some(c => c > 0); i++) {
-      const chunk = chunks[i]!
-      const counts: Record<string, number> = {}
-      let batchTotal = 0
-
-      let typeRound = 0
-      while (batchTotal < MAX_Q_PER_CHUNK) {
-        const active = typeEntries.filter(([q]) => (remaining[q] ?? 0) > 0)
-        if (active.length === 0) break
-        const [qtype] = active[typeRound % active.length]!
-        counts[qtype] = (counts[qtype] || 0) + 1
-        batchTotal++
-        remaining[qtype]!--
-        typeRound++
-      }
-
-      if (batchTotal > 0) {
-        batches.push({
-          ...baseParams,
-          count: batchTotal,
-          type_counts: counts,
-          text: chunk,
-          batch_index: batches.length + 1,
-          batch_total: 0,
-        } as ExamParams)
-      }
-    }
-
+    const typeEntries = Object.entries(baseParams.type_counts || {}).filter(([, c]) => c > 0)
+    const specs = computeBatchSpecs(
+      baseParams.text || '',
+      typeEntries.map(([type, count]) => ({ type, count })),
+    )
+    if (specs.length === 0) return [{ ...baseParams }]
+    const batches = specs.map((s, i) => ({
+      ...baseParams,
+      count: Object.values(s.typeCounts).reduce((a, b) => a + b, 0),
+      type_counts: s.typeCounts,
+      text: s.text,
+      batch_index: i + 1,
+      batch_total: 0,
+    }))
     const totalBatches = batches.length
-    for (const b of batches) {
-      b.batch_total = totalBatches
-    }
-
+    for (const b of batches) b.batch_total = totalBatches
     return batches
-  }
-
-  // File sections are separated by "\n\n---\n\n## "
-  // Returns array of { text, label } for each file section.
-  // If no file markers found, treat entire text as a single section.
-  function splitByFileSections(text: string): { text: string; label: string }[] {
-    const parts = text.split(/\n\n---\n\n(?=## )/)
-    if (parts.length <= 1) return [{ text, label: '' }]
-    return parts.map((p, i) => {
-      // Extract the label from "## filename\n..."
-      const nl = p.indexOf('\n')
-      const label = nl > 0 ? p.substring(3, nl).trim() : `File ${i + 1}`
-      const content = nl > 0 ? p.substring(nl + 1) : p
-      return { text: content, label }
-    })
-  }
-
-  // Allocate `chunkCount` chunks proportionally across file sections by their text length.
-  function chunkByFileProportion(sections: { text: string; label: string }[], chunkCount: number, fallbackText: string): string[] {
-    const sectionLengths = sections.map(s => s.text.length)
-    const totalLen = sectionLengths.reduce((s, l) => s + l, 0)
-
-    // Allocate chunks proportionally, ensuring at least 1 chunk per section if possible
-    const allocated: number[] = sectionLengths.map((len) => Math.max(1, Math.round(chunkCount * len / totalLen)))
-
-    // Adjust to match chunkCount exactly
-    let sum = allocated.reduce((s, n) => s + n, 0)
-    while (sum > chunkCount) {
-      const maxIdx = allocated.indexOf(Math.max(...allocated))
-      allocated[maxIdx]!--
-      sum--
-    }
-    while (sum < chunkCount) {
-      const minIdx = allocated.indexOf(Math.min(...allocated))
-      allocated[minIdx]!++
-      sum++
-    }
-
-    // Chunk each section using chunkTextBySize, prefix with label
-    const result: string[] = []
-    for (let i = 0; i < sections.length; i++) {
-      const sectionChunks = chunkTextBySize(sections[i]!.text, Math.max(1, allocated[i]!))
-      for (const chunk of sectionChunks) {
-        const prefix = sections[i]!.label ? `## ${sections[i]!.label}\n` : ''
-        result.push(prefix + chunk)
-      }
-    }
-
-    // If we have fewer chunks than requested, split the largest chunk
-    while (result.length < chunkCount) {
-      let maxIdx = 0
-      for (let i = 1; i < result.length; i++) {
-        if (result[i]!.length > result[maxIdx]!.length) maxIdx = i
-      }
-      const [a, b] = splitTextChunk(result[maxIdx]!)
-      result.splice(maxIdx, 1, a, b)
-    }
-    // If we have too many, merge the two shortest adjacent chunks
-    while (result.length > chunkCount) {
-      let minIdx = 0
-      let minLen = result[0]!.length + (result[1]?.length ?? Infinity)
-      for (let i = 1; i < result.length - 1; i++) {
-        const combined = result[i]!.length + result[i + 1]!.length
-        if (combined < minLen) { minLen = combined; minIdx = i }
-      }
-      result.splice(minIdx, 2, result[minIdx]! + '\n\n' + result[minIdx + 1]!)
-    }
-    if (result.length === 0) return [fallbackText]
-    return result
-  }
-
-  function splitTextChunk(chunk: string): [string, string] {
-    // Preserve "## label\n" header on both halves
-    let header = ''
-    let body = chunk
-    if (chunk.startsWith('## ')) {
-      const nl = chunk.indexOf('\n')
-      if (nl > 0) {
-        header = chunk.substring(0, nl + 1)
-        body = chunk.substring(nl + 1)
-      }
-    }
-    // Preserve a leading markdown table header (row + separator) on both halves
-    let tableHeader = ''
-    const lines = body.split('\n')
-    if (lines.length > 2 && lines[0]!.trim().startsWith('|') && TABLE_SEP_RE.test(lines[1]!.trim() ?? '')) {
-      tableHeader = lines[0]! + '\n' + lines[1]! + '\n'
-      body = lines.slice(2).join('\n')
-    }
-    const mid = Math.floor(body.length / 2)
-    const nl = body.indexOf('\n', mid)
-    const split = nl > 0 && nl < body.length - 1 ? nl + 1 : mid
-    return [
-      header + tableHeader + body.substring(0, split).trim(),
-      header + tableHeader + body.substring(split).trim(),
-    ]
   }
 
   function loadCachedQuestions(): Question[] {
@@ -482,6 +294,7 @@ export const useExamStore = defineStore('exam', () => {
     generating.value = true
     progress.value = { current: 0, total: 0, message: i18n.t('genProgressParsing'), phase: 'parsing' }
     questions.value = []
+    summary.value = null
     sourceFileName.value = extractFileName(inputs)
     abortController = new AbortController()
     const signal = abortController.signal
@@ -491,6 +304,9 @@ export const useExamStore = defineStore('exam', () => {
       const config = configStore.getConfig()
       const baseParams = getParams()
       const requestedDifficulty = baseParams.difficulty
+
+      baseParams.custom_prompt = extraPrompt.value?.trim() || undefined
+      if (typeof config.max_tokens === 'number') baseParams.max_tokens = config.max_tokens
 
       // Parse all files and concatenate text
       let fullText = await parseInputs(
@@ -517,7 +333,9 @@ export const useExamStore = defineStore('exam', () => {
       }
       const batches = buildBatches(baseParams)
       const firstInput = inputs[0]!
-      console.log('[Exameow] fileRef debug:', { isTauri: isTauri(), firstInputType: typeof firstInput, firstInputVal: firstInput })
+      if (import.meta.env.DEV) {
+        console.log('[Exameow] fileRef debug:', { isTauri: isTauri(), firstInputType: typeof firstInput, firstInputVal: firstInput })
+      }
       const fileRef = isTauri()
         ? (typeof firstInput === 'string' ? firstInput : (firstInput as File).name || 'file')
         : (firstInput as File)
@@ -526,35 +344,107 @@ export const useExamStore = defineStore('exam', () => {
 
       const useDirectAI = isCloudflare() && configStore.aiProvider === 'custom'
 
+      const requestedTotal = batches.reduce((s, b) => s + (b.count || 0), 0)
+      const sumCounts = (tc: Record<string, number> | undefined): number =>
+        Object.values(tc || {}).reduce((s, c) => s + c, 0)
+
+      const callOnce = async (batch: ExamParams): Promise<Question[]> => {
+        const exec = async () => {
+          if (useDirectAI && batch.text) {
+            const { callCustomAI } = await import('@/utils/aiClient')
+            const q = await callCustomAI(batch.text, batch, config, signal)
+            return tagQuestions(q, batch.text, sourceFileName.value, subject.value, topicFilter.value, requestedDifficulty, batch.auto_chapter)
+          }
+          const result = await api.generateExam(fileRef, batch, config, signal)
+          return tagQuestions(result.questions, batch.text ?? '', sourceFileName.value, subject.value, topicFilter.value, requestedDifficulty, batch.auto_chapter)
+        }
+        try {
+          return await exec()
+        } catch (e: any) {
+          if (e?.name === 'AbortError' || signal.aborted) throw e
+          progress.value = {
+            ...progress.value,
+            message: i18n.t('genRetrying', { current: batch.batch_index ?? 0, total: batch.batch_total ?? 1 }),
+          }
+          return await exec()
+        }
+      }
+
+      const tryGenerate = async (batch: ExamParams, depth = 0): Promise<number> => {
+        const expected = sumCounts(batch.type_counts)
+        if (expected <= 0) return 0
+        try {
+          const qs = await callOnce(batch)
+          questions.value.push(...qs)
+          return qs.length
+        } catch (e: any) {
+          if (e?.name === 'AbortError' || signal.aborted) throw e
+          const textLen = batch.text?.length ?? 0
+          if (expected === 1 && textLen >= 1500 && depth < 3) {
+            const [textA, textB] = splitTextChunk(batch.text!)
+            if (textA.trim()) {
+              const produced = await tryGenerate({ ...batch, text: textA }, depth + 1)
+              if (produced > 0) return produced
+            }
+            if (textB.trim()) {
+              return await tryGenerate({ ...batch, text: textB }, depth + 1)
+            }
+            return 0
+          }
+          if (depth >= 3 || expected <= 1 || textLen < 1500) {
+            console.warn(`[Exameow] give up batch ${batch.batch_index}: ${e}`)
+            return 0
+          }
+          const [textA, textB] = splitTextChunk(batch.text!)
+          const entries = Object.entries(batch.type_counts || {}).filter(([, c]) => c > 0)
+          const countsA: Record<string, number> = {}
+          const countsB: Record<string, number> = {}
+          let accA = 0
+          for (const [type, cnt] of entries) {
+            const half = Math.floor(cnt / 2)
+            const other = cnt - half
+            const a = accA % 2 === 0 ? half : other
+            const b = cnt - a
+            if (a > 0) countsA[type] = a
+            if (b > 0) countsB[type] = b
+            accA += a
+          }
+          let produced = 0
+          if (sumCounts(countsA) > 0 && textA.trim()) {
+            produced += await tryGenerate({ ...batch, text: textA, type_counts: countsA, count: sumCounts(countsA) }, depth + 1)
+          }
+          if (sumCounts(countsB) > 0 && textB.trim()) {
+            produced += await tryGenerate({ ...batch, text: textB, type_counts: countsB, count: sumCounts(countsB) }, depth + 1)
+          }
+          return produced
+        }
+      }
+
       const uniqueTexts = new Set(batches.map(b => b.text)).size
       const chunkSizes = [...new Set(batches.map(b => b.text || ''))].map(t => t.length)
-      console.log(
-        `[Exameow] ${batches.length} batches, ${uniqueTexts} unique text chunks, sizes: ${JSON.stringify(chunkSizes)}`,
-      )
+      if (import.meta.env.DEV) {
+        console.log(
+          `[Exameow] ${batches.length} batches, ${uniqueTexts} unique text chunks, sizes: ${JSON.stringify(chunkSizes)}`,
+        )
+      }
 
+      let generated = 0
       for (let i = 0; i < batches.length; i++) {
         if (signal.aborted) throw new DOMException('Cancelled', 'AbortError')
-        progress.value = { current: i, total: batches.length, phase: 'generating', message: i18n.t('genProgressGeneratingBatch', { current: i + 1, total: batches.length }) }
-        const batch = batches[i]
-        if (!batch) continue
-
-        const textLen = (batch.text || '').length
-        const textPreview = (batch.text || '').slice(0, 80).replace(/\n/g, '\\n')
-        console.log(
-          `[Exameow] Batch ${batch.batch_index}/${batch.batch_total}: ` +
-          `${JSON.stringify(batch.type_counts)} | ${textLen} chars | "${textPreview}..."`,
-        )
-
-        if (useDirectAI && batch.text) {
-          const { callCustomAI } = await import('@/utils/aiClient')
-          const questions_ = await callCustomAI(batch.text, batch, config, signal)
-          questions.value.push(...tagQuestions(questions_, batch.text, sourceFileName.value, subject.value, topicFilter.value, requestedDifficulty))
-        } else {
-          const result = await api.generateExam(fileRef, batch, config, signal)
-          questions.value.push(...tagQuestions(result.questions, batch.text ?? '', sourceFileName.value, subject.value, topicFilter.value, requestedDifficulty))
+        const batch = batches[i]!
+        if (batch.auto_chapter) {
+          batch.chapter_names = [...new Set(questions.value.flatMap(q => q.chapter ? [q.chapter] : []))]
         }
-        console.log(`[Exameow] Batch ${batch.batch_index} done: ${questions.value.length} questions total`)
+        progress.value = { current: i, total: batches.length, phase: 'generating', message: i18n.t('genProgressGeneratingBatch', { current: i + 1, total: batches.length }) }
+        try {
+          generated += await tryGenerate(batch)
+        } catch (e: any) {
+          if (e?.name === 'AbortError' || signal.aborted) throw e
+          console.warn(`[Exameow] batch ${batch.batch_index} unexpected failure:`, e)
+        }
       }
+      const skipped = Math.max(0, requestedTotal - generated)
+      summary.value = skipped > 0 ? { requested: requestedTotal, generated, skipped } : null
 
       progress.value = { current: batches.length, total: batches.length, phase: 'complete', message: i18n.t('genProgressComplete') }
       saveCachedQuestions()
@@ -584,12 +474,15 @@ export const useExamStore = defineStore('exam', () => {
     questions.value = []
     sourceFileName.value = ''
     subject.value = ''
+    extraPrompt.value = ''
+    summary.value = null
     try { localStorage.removeItem('exameow-questions'); localStorage.removeItem('exameow-sourcefile') } catch {}
   }
 
   return {
     questionTypes, typeCounts, totalCount,
-    difficulty, language, topicFilter, subject, questions, generating, generated,
+    difficulty, language, topicFilter, autoChapter, subject, questions, generating, generated,
     sourceFileName, error, progress, getParams, generate, cancelGeneration, reset,
+    extraPrompt, summary,
   }
 })

@@ -11,6 +11,7 @@ import type {
   SubmitExamRequest,
   SubmitExamResponse,
 } from './types'
+import { MAX_ANSWERS_BYTES, MAX_EXAM_PAYLOAD_BYTES, MAX_EXAM_RESULTS, MAX_STUDENT_NAME_CHARS } from './types'
 
 const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'
 const CODE_LENGTH = 6
@@ -105,17 +106,11 @@ export async function handlePublish(
   ip: string,
 ): Promise<Response> {
   const day = new Date().toISOString().slice(0, 10)
-  await db
-    .prepare(
-      'INSERT INTO publish_limits (ip, day, count) VALUES (?, ?, 1) ON CONFLICT(ip, day) DO UPDATE SET count = count + 1',
-    )
-    .bind(ip, day)
-    .run()
   const limitRow = await db
     .prepare('SELECT count FROM publish_limits WHERE ip = ? AND day = ?')
     .bind(ip, day)
     .first<{ count: number }>()
-  if ((limitRow?.count ?? 0) > MAX_PUBLISH_PER_DAY) {
+  if ((limitRow?.count ?? 0) >= MAX_PUBLISH_PER_DAY) {
     return json({ error: 'rate_limited' }, 429)
   }
 
@@ -126,6 +121,7 @@ export async function handlePublish(
   const { startAt, endAt, durationMinutes } = req
 
   if (!title) return json({ error: 'Title is required' }, 400)
+  if (title.length > 200) return json({ error: 'Title is too long' }, 400)
   if (!Array.isArray(questions) || questions.length === 0 || questions.length > MAX_QUESTIONS) {
     return json({ error: `Questions must be 1-${MAX_QUESTIONS}` }, 400)
   }
@@ -139,7 +135,8 @@ export async function handlePublish(
   ) {
     return json({ error: 'Invalid time window or duration' }, 400)
   }
-  if (JSON.stringify(questions).length > 5 * 1024 * 1024) {
+  const payload = JSON.stringify(questions)
+  if (payload.length > MAX_EXAM_PAYLOAD_BYTES) {
     return json({ error: 'Payload too large' }, 400)
   }
 
@@ -152,21 +149,18 @@ export async function handlePublish(
 
   const adminToken = randomToken()
   const adminTokenHash = await sha256Hex(adminToken)
-  await db
-    .prepare(
-      'INSERT INTO exams (code, title, questions, start_at, end_at, duration_minutes, created_at, admin_token_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-    )
-    .bind(
-      code,
-      title,
-      JSON.stringify(questions),
-      startAt,
-      endAt,
-      durationMinutes,
-      Date.now(),
-      adminTokenHash,
-    )
-    .run()
+  await db.batch([
+    db
+      .prepare(
+        'INSERT INTO exams (code, title, questions, start_at, end_at, duration_minutes, created_at, admin_token_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      )
+      .bind(code, title, payload, startAt, endAt, durationMinutes, Date.now(), adminTokenHash),
+    db
+      .prepare(
+        'INSERT INTO publish_limits (ip, day, count) VALUES (?, ?, 1) ON CONFLICT(ip, day) DO UPDATE SET count = count + 1',
+      )
+      .bind(ip, day),
+  ])
 
   const res: PublishExamResponse = {
     code,
@@ -246,8 +240,21 @@ export async function handleSubmit(
   if (typeof req.name !== 'string') return json({ error: 'Name is required' }, 400)
   const name = req.name.trim()
   if (!name) return json({ error: 'Name is required' }, 400)
-  const answers = req.answers && typeof req.answers === 'object' ? req.answers : {}
+  if (name.length > MAX_STUDENT_NAME_CHARS) return json({ error: 'Name is too long' }, 400)
+  const rawAnswers = req.answers && typeof req.answers === 'object' ? req.answers : {}
+  const answers = Object.fromEntries(
+    Object.entries(rawAnswers).filter(([, value]) => typeof value === 'string'),
+  ) as Record<string, string>
+  if (JSON.stringify(answers).length > MAX_ANSWERS_BYTES) {
+    return json({ error: 'Answers too large' }, 400)
+  }
   const durationSec = typeof req.durationSec === 'number' ? Math.max(0, Math.round(req.durationSec)) : 0
+
+  const stored = await db
+    .prepare('SELECT COUNT(*) AS n FROM results WHERE code = ?')
+    .bind(code)
+    .first<{ n: number }>()
+  if ((stored?.n ?? 0) >= MAX_EXAM_RESULTS) return json({ error: 'exam_full' }, 429)
 
   const graded: GradedQuestion[] = exam.questions.map((q) => {
     const raw = answers[q.id]
@@ -263,9 +270,7 @@ export async function handleSubmit(
 
   const entry: ExamResultEntry = {
     name,
-    answers: Object.fromEntries(
-      Object.entries(answers).filter(([, v]) => typeof v === 'string'),
-    ),
+    answers,
     score,
     totalScore,
     correctCount,

@@ -75,6 +75,8 @@ Turn generated questions into interactive study sessions. Practice sequentially,
 - **Exam / Flashcard Modes** — Answer blind, or flip through questions with answers visible
 - **AI Grading** — Short-answer questions graded by AI against reference answers, with feedback; manual regrading supported
 - **Question Bank Management** — Import banks from XLSX/CSV with smart column mapping; export anytime
+- **Chapter Practice** — Add a `Chapter` column to CSV/XLSX; matching names are grouped automatically. Select one or more chapters, including unchaptered questions, before practice. Banks without chapters continue to work.
+- **AI Chapter Tagging** — Enable the optional switch when generating new questions to use source chapters or knowledge topics. It is off by default and uses the existing generation requests.
 
 ### 📝 Online Exams — Publish and Invite Students
 
@@ -116,7 +118,7 @@ Pre-built binaries for all platforms are available on the [GitHub Releases](http
 | Platform | Status | Download |
 |----------|--------|----------|
 | Windows | ✅ Supported | `.msi` installer / portable `.zip` |
-| macOS (Apple Silicon) | ✅ Supported | `.dmg` (see release notes to remove quarantine) |
+| macOS (Apple Silicon / Intel) | ✅ Supported | `.dmg` (see release notes to remove quarantine) |
 | Linux (x86_64 / ARM64) | ✅ Supported | `.AppImage` / `.deb` |
 | Android (ARM64) | ✅ Supported | `.apk` |
 | iOS | ⚠️ Self-build required | See note below |

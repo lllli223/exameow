@@ -1,5 +1,12 @@
-import { invoke } from '@tauri-apps/api/core'
-import type { AIConfig, AnswerResult, ExamParams, ExplainParams, ExplainResult, JudgeParams, JudgeResult, ModelInfo, Question } from '@exameow/shared'
+import { Channel, invoke } from '@tauri-apps/api/core'
+import type { AIConfig, AIRequestOptions, AnswerResult, ChatMessage, ExamParams, ExplainParams, ExplainResult, JudgeParams, JudgeResult, ModelInfo, Question } from '@exameow/shared'
+import type { ChatStreamHandlers } from '@/utils/chatStream'
+
+interface TauriChatEvent {
+  type?: string
+  text?: string
+  message?: string
+}
 
 export interface GenerateResult {
   questions: Question[]
@@ -9,6 +16,29 @@ export interface OtaStatus {
   status: string
   version: string | null
   error: string | null
+}
+
+async function invokeAI<T>(
+  command: string,
+  args: Record<string, unknown>,
+  signal?: AbortSignal,
+): Promise<T> {
+  if (signal?.aborted) throw new DOMException('Cancelled', 'AbortError')
+  const requestId = crypto.randomUUID()
+  const cancel = () => {
+    void invoke('cancel_ai_request', { requestId }).catch(() => {})
+  }
+  signal?.addEventListener('abort', cancel, { once: true })
+  try {
+    const result = await invoke<T>(command, { ...args, requestId })
+    if (signal?.aborted) throw new DOMException('Cancelled', 'AbortError')
+    return result
+  } catch (error) {
+    if (signal?.aborted) throw new DOMException('Cancelled', 'AbortError')
+    throw error
+  } finally {
+    signal?.removeEventListener('abort', cancel)
+  }
 }
 
 export const tauriApi = {
@@ -30,6 +60,7 @@ export const tauriApi = {
     endpoint: string,
     apiKey: string,
     model: string,
+    options?: AIRequestOptions,
     signal?: AbortSignal,
   ): Promise<GenerateResult> {
     if (signal?.aborted) throw new DOMException('Cancelled', 'AbortError')
@@ -39,14 +70,20 @@ export const tauriApi = {
     const safePath = typeof filePath === 'string' ? filePath : String(filePath || 'file')
     console.log('[bridge] safePath:', safePath)
     try {
-      return await invoke<GenerateResult>('generate_exam', {
-        filePath: safePath,
-        paramsJson: JSON.stringify(params),
-        endpoint,
-        apiKey,
-        model,
-      })
+      return await invokeAI<GenerateResult>(
+        'generate_exam',
+        {
+          filePath: safePath,
+          paramsJson: JSON.stringify(params),
+          endpoint,
+          apiKey,
+          model,
+          options,
+        },
+        signal,
+      )
     } catch (e: any) {
+      signal?.throwIfAborted()
       const detail = `[DIAG] filePath type=${fpType} val=${fpVal} safePath=${safePath} | ${e?.message || e}`
       console.error(detail)
       throw new Error(detail)
@@ -103,8 +140,14 @@ export const tauriApi = {
     endpoint: string,
     apiKey: string,
     model: string,
+    options?: AIRequestOptions,
+    signal?: AbortSignal,
   ): Promise<AnswerResult> {
-    return invoke<AnswerResult>('answer_question', { question, language, endpoint, apiKey, model })
+    return invokeAI<AnswerResult>(
+      'answer_question',
+      { question, language, endpoint, apiKey, model, options },
+      signal,
+    )
   },
 
   async judgeAnswer(
@@ -113,17 +156,24 @@ export const tauriApi = {
     endpoint: string,
     apiKey: string,
     model: string,
+    options?: AIRequestOptions,
+    signal?: AbortSignal,
   ): Promise<JudgeResult> {
-    return invoke<JudgeResult>('judge_answer', {
-      stem: params.stem,
-      referenceAnswer: params.reference_answer,
-      analysis: params.analysis ?? '',
-      userAnswer: params.user_answer,
-      language,
-      endpoint,
-      apiKey,
-      model,
-    })
+    return invokeAI<JudgeResult>(
+      'judge_answer',
+      {
+        stem: params.stem,
+        referenceAnswer: params.reference_answer,
+        analysis: params.analysis ?? '',
+        userAnswer: params.user_answer,
+        language,
+        endpoint,
+        apiKey,
+        model,
+        options,
+      },
+      signal,
+    )
   },
 
   async explainQuestion(
@@ -132,20 +182,88 @@ export const tauriApi = {
     endpoint: string,
     apiKey: string,
     model: string,
+    options?: AIRequestOptions,
+    signal?: AbortSignal,
   ): Promise<ExplainResult> {
-    return invoke<ExplainResult>('explain_question', {
-      stem: params.stem,
-      referenceAnswer: params.reference_answer,
-      analysis: params.analysis ?? '',
-      language,
-      endpoint,
-      apiKey,
-      model,
-    })
+    return invokeAI<ExplainResult>(
+      'explain_question',
+      {
+        stem: params.stem,
+        referenceAnswer: params.reference_answer,
+        analysis: params.analysis ?? '',
+        language,
+        endpoint,
+        apiKey,
+        model,
+        options,
+      },
+      signal,
+    )
+  },
+
+  async chatStream(
+    messages: ChatMessage[],
+    endpoint: string,
+    apiKey: string,
+    model: string,
+    options: AIRequestOptions | undefined,
+    handlers: ChatStreamHandlers,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    if (signal?.aborted) return
+    const requestId = crypto.randomUUID()
+    let settled = false
+    const channel = new Channel<TauriChatEvent>()
+    channel.onmessage = (event) => {
+      if (signal?.aborted) return
+      if (event?.type === 'delta' && typeof event.text === 'string') {
+        handlers.onDelta(event.text)
+      } else if (event?.type === 'error') {
+        settled = true
+        if (event.message === 'Cancelled') return
+        handlers.onError(new Error(event.message || 'AI error'))
+      } else if (event?.type === 'done') {
+        settled = true
+        handlers.onDone()
+      }
+    }
+    const cancel = () => {
+      void invoke('cancel_ai_request', { requestId }).catch(() => {})
+    }
+    signal?.addEventListener('abort', cancel, { once: true })
+    try {
+      await invoke('chat_with_ai', {
+        onEvent: channel,
+        messages,
+        endpoint,
+        apiKey,
+        model,
+        options,
+        requestId,
+      })
+    } catch (error) {
+      if (!signal?.aborted && !settled) handlers.onError(error)
+    } finally {
+      signal?.removeEventListener('abort', cancel)
+    }
   },
 
   async saveConfig(config: AIConfig): Promise<void> {
-    return invoke<void>('save_config', { endpoint: config.endpoint, apiKey: config.api_key, model: config.model })
+    return invoke<void>('save_config', {
+      config: {
+        endpoint: config.endpoint,
+        api_key: config.api_key,
+        model: config.model,
+        max_tokens: config.max_tokens,
+        token_parameter: config.token_parameter,
+        temperature: config.temperature,
+        omit_temperature: config.omit_temperature,
+        reasoning_effort: config.reasoning_effort,
+        extra_prompt: config.extra_prompt,
+        retries: config.retries,
+        timeout_seconds: config.timeout_seconds,
+      },
+    })
   },
 
   async loadConfig(): Promise<AIConfig | null> {

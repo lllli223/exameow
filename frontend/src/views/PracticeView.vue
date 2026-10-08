@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useI18nStore } from '@/stores/i18n'
 import { usePracticeStore } from '@/stores/practice'
 import { useWrongQuestionsStore } from '@/stores/wrongQuestions'
 import { useConfigStore } from '@/stores/config'
+import { useLearnStore } from '@/stores/learn'
 import { api } from '@/api'
 import { isCloudflare } from '@/utils/platform'
 import { isStudySyncConfigured } from '@/services/studySync'
@@ -36,13 +37,16 @@ import {
   ArrowPathRoundedSquareIcon,
   ExclamationTriangleIcon,
   FlagIcon,
+  ChatBubbleLeftRightIcon,
 } from '@heroicons/vue/24/outline'
 
 const i18n = useI18nStore()
+const route = useRoute()
 const router = useRouter()
 const practiceStore = usePracticeStore()
 const wrongStore = useWrongQuestionsStore()
 const configStore = useConfigStore()
+const learnStore = useLearnStore()
 
 type ViewState = 'browse' | 'settings' | 'practice' | 'result'
 
@@ -185,7 +189,8 @@ const currentWrongCount = computed(() => {
 
 const resumeSessionHasWrong = computed(() => {
   if (!practiceStore.session) return false
-  return wrongStore.hasWrongQuestions(practiceStore.session.bankId)
+  return wrongStore.getWrongQuestions(practiceStore.session.bankId, wrongSort.value)
+    .some(q => matchPracticeFilter(q, practiceStore.session!.filter))
 })
 
 onMounted(() => {
@@ -200,6 +205,11 @@ onMounted(() => {
     void practiceStore.syncStudyBanks()
       .catch(() => {})
       .finally(() => { remoteBankSyncing.value = false })
+  }
+  // Returning from "Learn with AI" should open the session at the current question.
+  if (route.query.resume === '1' && practiceStore.session) {
+    resumeSession()
+    router.replace({ path: '/practice' })
   }
 })
 
@@ -267,7 +277,10 @@ const filteredQuestions = computed(() => {
   if (!selectedBankId.value) return []
   const bank = practiceStore.getBank(selectedBankId.value)
   if (!bank) return []
-  return bank.questions.filter(q => matchPracticeFilter(q, practiceFilter.value))
+  const pool = selectedMode.value === 'wrong'
+    ? wrongStore.getWrongQuestions(bank.id, wrongSort.value)
+    : bank.questions
+  return pool.filter(q => matchPracticeFilter(q, practiceFilter.value))
 })
 
 const availableTypes = computed(() => {
@@ -307,7 +320,6 @@ const canStartMockExam = computed(() => {
 
 const canStartSelectedMode = computed(() => {
   if (!selectedMode.value) return false
-  if (selectedMode.value === 'wrong') return selectedBankId.value !== null && wrongStore.hasWrongQuestions(selectedBankId.value)
   return filteredQuestions.value.length > 0 && (selectedMode.value !== 'mock' || canStartMockExam.value)
 })
 
@@ -356,12 +368,13 @@ function handleStartWrongPractice(sort: WrongSort) {
 function startWrongPractice(sort: WrongSort) {
   if (!selectedBankId.value) return
   const wrongQs = wrongStore.getWrongQuestions(selectedBankId.value, sort)
+    .filter(q => matchPracticeFilter(q, practiceFilter.value))
   if (wrongQs.length === 0) return
   if (practiceStore.session && practiceStore.session.mode !== 'wrong') {
     savedMainSession.value = JSON.parse(JSON.stringify(practiceStore.session))
   }
   wrongSort.value = sort
-  practiceStore.startSession(selectedBankId.value, 'wrong', undefined, wrongQs)
+  practiceStore.startSession(selectedBankId.value, 'wrong', undefined, wrongQs, practiceFilter.value as PracticeFilter)
   viewState.value = 'practice'
   autoAdvancing.value = false
   selectedMode.value = 'wrong'
@@ -370,6 +383,7 @@ function startWrongPractice(sort: WrongSort) {
 function handleWrongPracticeFromCard() {
   if (!practiceStore.session) return
   selectedBankId.value = practiceStore.session.bankId
+  practiceFilter.value = getResumedPracticeSettings(practiceStore.session).filter
   showWrongSortDialog.value = true
 }
 
@@ -387,6 +401,7 @@ function handleRemoveWrong() {
 
 function handleManageWrong(bankId: string) {
   selectedBankId.value = bankId
+  practiceFilter.value = {}
   showWrongSortDialog.value = true
 }
 
@@ -540,6 +555,50 @@ async function handleAiExplain() {
     aiExplaining.value = false
     explainAbort = null
   }
+}
+
+function handleAiAsk() {
+  const session = practiceStore.session
+  const item = practiceStore.currentQuestion
+  if (!session || !item) return
+  learnStore.start({
+    bankId: session.bankId,
+    bankName: sessionBankName.value,
+    questions: session.questions.map(q => q.question),
+    index: session.currentIndex,
+    entry: 'explain',
+    userAnswer: item.userAnswer,
+  })
+  router.push('/learn')
+}
+
+function handleStartLearn() {
+  if (!selectedBankId.value) return
+  const bank = practiceStore.getBank(selectedBankId.value)
+  if (!bank) return
+  const questions = filteredQuestions.value
+  if (questions.length === 0) return
+  learnStore.start({
+    bankId: bank.id,
+    bankName: bank.name,
+    questions,
+    index: 0,
+    entry: 'answer',
+  })
+  router.push('/learn')
+}
+
+function handleResumeLearn() {
+  const session = practiceStore.session
+  if (!session) return
+  learnStore.start({
+    bankId: session.bankId,
+    bankName: sessionBankName.value,
+    questions: session.questions.map(q => q.question),
+    index: session.currentIndex,
+    entry: 'answer',
+  })
+  router.push('/learn')
 }
 
 async function handleAiJudge() {
@@ -756,6 +815,14 @@ function handleBack() {
               <ExclamationTriangleIcon class="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
               <span class="truncate">{{ i18n.t('practiceWrongPractice') }}</span>
             </button>
+            <button
+              class="btn-tonal !h-8 sm:!h-9 text-xs sm:text-sm !px-3 sm:!px-4 shrink-0 max-w-full"
+              :disabled="!configStore.configured"
+              @click="handleResumeLearn"
+            >
+              <ChatBubbleLeftRightIcon class="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
+              <span class="truncate">{{ i18n.t('learnModeTitle') }}</span>
+            </button>
             <button class="btn-filled !h-8 sm:!h-9 text-xs sm:text-sm !px-3 sm:!px-4 shrink-0 max-w-full" @click="resumeSession">
               <PlayIcon class="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
               <span class="truncate">{{ i18n.t('practiceContinue') }}</span>
@@ -793,9 +860,11 @@ function handleBack() {
         <ModeSelector
           v-model="selectedMode"
           :has-wrong-questions="wrongStore.hasWrongQuestions(selectedBankId)"
+          @select-learn="handleStartLearn"
         />
         <FilterBar
           :bank="practiceStore.getBank(selectedBankId)!"
+          :matched-count="filteredQuestions.length"
           v-model="practiceFilter"
         />
       </div>
@@ -888,6 +957,7 @@ function handleBack() {
             @ai-judge="handleAiJudge"
             @ai-cancel="handleAiCancel"
             @ai-explain="handleAiExplain"
+            @ai-ask="handleAiAsk"
             @regrade="handleRegrade"
             @submit="handleSubmit"
             @select="handleSelect"

@@ -5,11 +5,27 @@ use ring::rand::{SecureRandom, SystemRandom};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AIConfigData {
     pub endpoint: String,
     pub api_key: String,
     pub model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_parameter: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f64>,
+    #[serde(default)]
+    pub omit_temperature: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extra_prompt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retries: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_seconds: Option<u64>,
 }
 
 pub struct ConfigStore {
@@ -100,14 +116,8 @@ impl ConfigStore {
         Ok(Self { config_path, key })
     }
 
-    pub fn save(&self, endpoint: &str, api_key: &str, model: &str) -> Result<(), CoreError> {
-        let config = AIConfigData {
-            endpoint: endpoint.to_string(),
-            api_key: api_key.to_string(),
-            model: model.to_string(),
-        };
-
-        let plaintext = serde_json::to_vec(&config)
+    pub fn save(&self, config: &AIConfigData) -> Result<(), CoreError> {
+        let plaintext = serde_json::to_vec(config)
             .map_err(|e| CoreError::Config(format!("serialize error: {e}")))?;
         let encoded = seal(&self.key, &plaintext)?;
         std::fs::write(&self.config_path, encoded)

@@ -2,6 +2,27 @@
 export type Locale = 'zh' | 'zh-TW' | 'en' | 'ja' | 'ko' | 'es' | 'fr' | 'de' | 'ru' | 'ar'
 
 export interface LocaleMessages {
+  practiceUnchaptered: string
+  practiceChapterImportHint: string
+  genAutoChapter: string
+  genAutoChapterHint: string
+  configAdvancedAI: string
+  configAdvancedAIHint: string
+  configGroupOutput: string
+  configGroupSampling: string
+  configGroupReliability: string
+  configGroupPrompt: string
+  configTokenParameter: string
+  configTemperature: string
+  configOmitTemperature: string
+  configReasoningEffort: string
+  configReasoningDefault: string
+  configExtraPrompt: string
+  configExtraPromptHint: string
+  configRetries: string
+  configRetryHint: string
+  configTimeout: string
+
   appName: string
   appSubtitle: string
   navConfig: string
@@ -76,6 +97,13 @@ export interface LocaleMessages {
   genTopicPlaceholder: string
   genSubject: string
   genSubjectPlaceholder: string
+  genExtraPrompt: string
+  genExtraPromptPlaceholder: string
+  genShortfallTitle: string
+  genShortfallBody: string
+  genRetrying: string
+  configMaxTokens: string
+  configMaxTokensHint: string
   genGenerateBtn: string
   genGenerating: string
   genFileSelected: string
@@ -343,6 +371,17 @@ export interface LocaleMessages {
   practiceAiExplain: string
   practiceAiExplaining: string
   practiceAiRegenerate: string
+  learnModeTitle: string
+  learnModeDesc: string
+  learnAskAi: string
+  learnTitle: string
+  learnQuestionLabel: string
+  learnPlaceholderAnswer: string
+  learnPlaceholderAsk: string
+  learnThinking: string
+  learnStop: string
+  learnSend: string
+  learnComposerHint: string
   cookieBannerText: string
   cookieBannerAccept: string
   updateAvailableTitle: string
@@ -483,6 +522,38 @@ export interface LocaleMessages {
 }
 
 export const zh: LocaleMessages = {
+  learnModeTitle: '和AI一起学',
+  learnModeDesc: '把这道题交给 AI 导师，边答边讲、随时追问',
+  learnAskAi: '向AI提问',
+  learnTitle: '和AI一起学',
+  learnQuestionLabel: '题目',
+  learnPlaceholderAnswer: '输入你的答案…',
+  learnPlaceholderAsk: '继续向 AI 提问…',
+  learnThinking: 'AI 正在思考…',
+  learnStop: '停止',
+  learnSend: '发送',
+  learnComposerHint: 'Enter 发送 · Shift+Enter 换行',
+  practiceUnchaptered: "未分章",
+  practiceChapterImportHint: "CSV/XLSX 可填写“章节”列，同名自动分组；无章节列仍可正常导入。",
+  genAutoChapter: "AI 自动分章",
+  genAutoChapterHint: "根据资料为每题标注章节；知识点输入仅限定出题范围。",
+  configAdvancedAI: "AI 高级设置",
+  configAdvancedAIHint: "适用于当前设备上的出题、答题、批改和解析。思考使用 reasoning_effort，支持的档位取决于模型。OpenAI 推理模型请选择 max_completion_tokens，temperature 留空即不发送。",
+  configGroupOutput: "输出上限",
+  configGroupSampling: "采样与思考",
+  configGroupReliability: "可靠性",
+  configGroupPrompt: "补充 Prompt",
+  configTokenParameter: "输出上限 API 字段",
+  configTemperature: "Temperature (0–2)",
+  configOmitTemperature: "留空则不发送 temperature",
+  configReasoningEffort: "思考强度",
+  configReasoningDefault: "跟随模型",
+  configExtraPrompt: "具体要求",
+  configExtraPromptHint: "为所有 AI 调用补充要求；程序仍保留必要的 JSON 输出规则。",
+  configRetries: "自动重试次数（0 为关闭）",
+  configRetryHint: "仅重试临时网络错误、超时、HTTP 408/429 和 5xx，最多额外尝试 5 次。每次尝试可能计费。",
+  configTimeout: "每次请求超时（秒）",
+
   appName: '过了喵',
   appSubtitle: 'AI 智能出题',
   navConfig: '配置',
@@ -557,6 +628,13 @@ export const zh: LocaleMessages = {
   genTopicPlaceholder: '如：机器学习基础',
   genSubject: '学科',
   genSubjectPlaceholder: '输入本次出题的学科，不填则留空',
+  genExtraPrompt: '额外提示词（可选）',
+  genExtraPromptPlaceholder: '例如：忽略目录、页眉页脚、参考文献与致谢，只围绕正文要点出题',
+  genShortfallTitle: '部分内容生成失败',
+  genShortfallBody: '成功生成 {generated} 题；{skipped} 题重试后仍失败已跳过。',
+  genRetrying: '第 {current}/{total} 批失败，正在重试…',
+  configMaxTokens: '单次响应 Max Tokens',
+  configMaxTokensHint: '留空则不传（由服务端决定），输出较长时建议填写',
   genGenerateBtn: '生成试题',
   genGenerating: '生成中...',
   genFileSelected: '已选择',
@@ -964,6 +1042,38 @@ export const zh: LocaleMessages = {
 }
 
 export const zhTW: LocaleMessages = {
+  learnModeTitle: '和AI一起學',
+  learnModeDesc: '把這道題交給 AI 導師，邊答邊講、隨時追問',
+  learnAskAi: '向AI提問',
+  learnTitle: '和AI一起學',
+  learnQuestionLabel: '題目',
+  learnPlaceholderAnswer: '輸入你的答案…',
+  learnPlaceholderAsk: '繼續向 AI 提問…',
+  learnThinking: 'AI 正在思考…',
+  learnStop: '停止',
+  learnSend: '傳送',
+  learnComposerHint: 'Enter 傳送 · Shift+Enter 換行',
+  practiceUnchaptered: "未分章",
+  practiceChapterImportHint: "CSV/XLSX 可填寫「章節」欄，同名自動分組；無章節欄仍可正常匯入。",
+  genAutoChapter: "AI 自動分章",
+  genAutoChapterHint: "根據資料為每題標註章節；知識點輸入僅限定出題範圍。",
+  configAdvancedAI: "AI 進階設定",
+  configAdvancedAIHint: "適用於此裝置上的出題、答題、批改與解析。思考使用 reasoning_effort，支援的檔位取決於模型。OpenAI 推理模型請選擇 max_completion_tokens，temperature 留空即不傳送。",
+  configGroupOutput: "輸出上限",
+  configGroupSampling: "取樣與思考",
+  configGroupReliability: "可靠性",
+  configGroupPrompt: "補充 Prompt",
+  configTokenParameter: "輸出上限 API 欄位",
+  configTemperature: "Temperature (0–2)",
+  configOmitTemperature: "留空則不傳送 temperature",
+  configReasoningEffort: "思考強度",
+  configReasoningDefault: "跟隨模型",
+  configExtraPrompt: "具體要求",
+  configExtraPromptHint: "為所有 AI 呼叫補充要求；程式仍保留必要的 JSON 輸出規則。",
+  configRetries: "自動重試次數（0 為關閉）",
+  configRetryHint: "僅重試暫時性網路錯誤、逾時、HTTP 408/429 與 5xx，最多額外嘗試 5 次。每次嘗試可能計費。",
+  configTimeout: "每次請求逾時（秒）",
+
   appName: '過瞭喵',
   appSubtitle: 'AI 智能出題',
   navConfig: '配置',
@@ -1038,6 +1148,13 @@ export const zhTW: LocaleMessages = {
   genTopicPlaceholder: '如：机器学习基础',
   genSubject: '學科',
   genSubjectPlaceholder: '輸入本次出題的學科，不填則留空',
+  genExtraPrompt: '額外提示詞（可選）',
+  genExtraPromptPlaceholder: '例如：忽略目錄、頁首頁尾、參考文獻與致謝，只圍繞正文要點出題',
+  genShortfallTitle: '部分內容生成失敗',
+  genShortfallBody: '成功生成 {generated} 題；{skipped} 題重試後仍失敗已略過。',
+  genRetrying: '第 {current}/{total} 批失敗，重試中…',
+  configMaxTokens: '單次回應 Max Tokens',
+  configMaxTokensHint: '留空則不傳（由服務端決定），輸出較長時建議填寫',
   genGenerateBtn: '生成試題',
   genGenerating: '生成中...',
   genFileSelected: '已選擇',
@@ -1445,6 +1562,38 @@ export const zhTW: LocaleMessages = {
 }
 
 export const en: LocaleMessages = {
+  learnModeTitle: 'Learn with AI',
+  learnModeDesc: 'Hand this question to an AI tutor — answer, get it explained, and ask follow-ups',
+  learnAskAi: 'Ask AI',
+  learnTitle: 'Learn with AI',
+  learnQuestionLabel: 'Question',
+  learnPlaceholderAnswer: 'Type your answer…',
+  learnPlaceholderAsk: 'Ask a follow-up…',
+  learnThinking: 'AI is thinking…',
+  learnStop: 'Stop',
+  learnSend: 'Send',
+  learnComposerHint: 'Enter to send · Shift+Enter for a new line',
+  practiceUnchaptered: "Unchaptered",
+  practiceChapterImportHint: "Add a Chapter column to CSV/XLSX to group questions by name. Files without chapters still work.",
+  genAutoChapter: "AI chapter tagging",
+  genAutoChapterHint: "Label each question from the material; the topic input only limits the question scope.",
+  configAdvancedAI: "Advanced AI settings",
+  configAdvancedAIHint: "Applies to generation, answers, grading and explanations on this device. Thinking uses reasoning_effort; supported values depend on the model. For OpenAI reasoning models, select max_completion_tokens; leave temperature blank to omit it.",
+  configGroupOutput: "Output limit",
+  configGroupSampling: "Sampling & thinking",
+  configGroupReliability: "Reliability",
+  configGroupPrompt: "Extra prompt",
+  configTokenParameter: "Output limit API field",
+  configTemperature: "Temperature (0–2)",
+  configOmitTemperature: "Leave blank to omit temperature",
+  configReasoningEffort: "Thinking effort",
+  configReasoningDefault: "Model default",
+  configExtraPrompt: "Additional prompt",
+  configExtraPromptHint: "Extra instructions for all AI calls; the required JSON output rules remain in place.",
+  configRetries: "Automatic retries (0 = off)",
+  configRetryHint: "Retries transient network errors, timeouts, HTTP 408/429 and 5xx, up to 5 extra attempts. Each attempt may incur charges.",
+  configTimeout: "Timeout per attempt (seconds)",
+
   appName: 'Exameow',
   appSubtitle: 'AI Question Generator',
   navConfig: 'Config',
@@ -1519,6 +1668,13 @@ export const en: LocaleMessages = {
   genTopicPlaceholder: 'e.g. Machine Learning Basics',
   genSubject: 'Subject',
   genSubjectPlaceholder: 'Enter the subject for this batch, leave empty to omit',
+  genExtraPrompt: 'Additional prompt (optional)',
+  genExtraPromptPlaceholder: 'e.g. Ignore TOC, headers/footers, references and acknowledgements; only ask about the body content',
+  genShortfallTitle: 'Some content failed to generate',
+  genShortfallBody: 'Generated {generated} questions; {skipped} skipped after retries failed.',
+  genRetrying: 'Batch {current}/{total} failed, retrying…',
+  configMaxTokens: 'Response Max Tokens',
+  configMaxTokensHint: 'Leave empty to omit (server decides). Recommended when output tends to be long',
   genGenerateBtn: 'Generate Questions',
   genGenerating: 'Generating...',
   genFileSelected: 'Selected',
@@ -1926,6 +2082,38 @@ export const en: LocaleMessages = {
 }
 
 export const ja: LocaleMessages = {
+  learnModeTitle: 'AIと一緒に学ぶ',
+  learnModeDesc: 'この問題をAIチューターに。答えながら解説を受け、いつでも質問できます',
+  learnAskAi: 'AIに質問',
+  learnTitle: 'AIと一緒に学ぶ',
+  learnQuestionLabel: '問題',
+  learnPlaceholderAnswer: '答えを入力…',
+  learnPlaceholderAsk: '追加で質問する…',
+  learnThinking: 'AIが考えています…',
+  learnStop: '停止',
+  learnSend: '送信',
+  learnComposerHint: 'Enterで送信 · Shift+Enterで改行',
+  practiceUnchaptered: "章未設定",
+  practiceChapterImportHint: "CSV/XLSX の「Chapter」列で同名の章をまとめます。章のないファイルも読み込めます。",
+  genAutoChapter: "AIで章を自動設定",
+  genAutoChapterHint: "資料から各問題の章を設定します。トピック入力は出題範囲のみを指定します。",
+  configAdvancedAI: "AI 詳細設定",
+  configAdvancedAIHint: "この端末での出題・解答・採点・解説に適用されます。思考は reasoning_effort を使用し、対応値はモデルに依存します。OpenAI の推論モデルでは max_completion_tokens を選び、temperature は空欄にすると送信されません。",
+  configGroupOutput: "出力上限",
+  configGroupSampling: "サンプリングと思考",
+  configGroupReliability: "信頼性",
+  configGroupPrompt: "追加プロンプト",
+  configTokenParameter: "出力上限の API フィールド",
+  configTemperature: "Temperature（0～2）",
+  configOmitTemperature: "空欄の場合は temperature を送信しません",
+  configReasoningEffort: "思考の強度",
+  configReasoningDefault: "モデルに従う",
+  configExtraPrompt: "追加プロンプト",
+  configExtraPromptHint: "すべての AI 呼び出しに追加指示を渡します。必須の JSON 出力規則は維持されます。",
+  configRetries: "自動リトライ（0 で無効）",
+  configRetryHint: "一時的なネットワークエラー、タイムアウト、HTTP 408/429、5xx のみ最大 5 回まで再試行します。試行ごとに課金される場合があります。",
+  configTimeout: "1 回あたりのタイムアウト（秒）",
+
   appName: 'Exameow',
   appSubtitle: 'AI問題ジェネレーター',
   navConfig: '設定',
@@ -2000,6 +2188,13 @@ export const ja: LocaleMessages = {
   genTopicPlaceholder: '例: 第1章 確率論、二分木...',
   genSubject: '科目',
   genSubjectPlaceholder: 'この出題の科目を入力（空欄可）',
+  genExtraPrompt: '追加プロンプト（任意）',
+  genExtraPromptPlaceholder: '例: 目次・ヘッダー/フッター・参考文献・謝辞を無視し、本文の要点だけを出題対象にする',
+  genShortfallTitle: '一部の内容の生成に失敗しました',
+  genShortfallBody: '{generated} 問の生成に成功しました。{skipped} 問は再試行後も失敗したためスキップされました。',
+  genRetrying: 'バッチ {current}/{total} が失敗しました。再試行中…',
+  configMaxTokens: 'レスポンスの Max Tokens',
+  configMaxTokensHint: '空欄の場合は送信しません（サーバー側で決定）。出力が長くなりがちな場合は入力推奨',
   genGenerateBtn: '問題を生成する',
   genGenerating: '問題生成中...',
   genFileSelected: '選択済み',
@@ -2140,7 +2335,7 @@ export const ja: LocaleMessages = {
   practiceQuestionUnit: '問',
   practiceMultiFileHint: '複数ファイル選択可',
   practiceFileCount: '{n} 個のファイル',
-  practiceAddFile: 'ファイル追加',
+  practiceAddFile: '+ ファイル追加',
   practiceClearAll: 'すべてクリア',
   practiceImportCount: '{n} 問のインポート準備完了',
   practiceImportColType: '形式列',
@@ -2407,6 +2602,38 @@ export const ja: LocaleMessages = {
 }
 
 export const ko: LocaleMessages = {
+  learnModeTitle: 'Learn with AI',
+  learnModeDesc: 'Hand this question to an AI tutor — answer, get it explained, and ask follow-ups',
+  learnAskAi: 'Ask AI',
+  learnTitle: 'Learn with AI',
+  learnQuestionLabel: 'Question',
+  learnPlaceholderAnswer: 'Type your answer…',
+  learnPlaceholderAsk: 'Ask a follow-up…',
+  learnThinking: 'AI is thinking…',
+  learnStop: 'Stop',
+  learnSend: 'Send',
+  learnComposerHint: 'Enter to send · Shift+Enter for a new line',
+  practiceUnchaptered: "미분류",
+  practiceChapterImportHint: "CSV/XLSX에 Chapter 열을 추가하면 같은 이름으로 묶습니다. 장이 없는 파일도 가져올 수 있습니다.",
+  genAutoChapter: "AI 자동 장 분류",
+  genAutoChapterHint: "자료를 바탕으로 각 문제의 장을 지정합니다. 주제 입력은 출제 범위만 제한합니다.",
+  configAdvancedAI: "AI 고급 설정",
+  configAdvancedAIHint: "이 기기의 출제, 답변, 채점, 해설에 적용됩니다. 사고는 reasoning_effort를 사용하며 지원 범위는 모델에 따라 다릅니다. OpenAI 추론 모델은 max_completion_tokens를 선택하고 temperature는 비워 두면 전송되지 않습니다.",
+  configGroupOutput: "출력 한도",
+  configGroupSampling: "샘플링 및 사고",
+  configGroupReliability: "안정성",
+  configGroupPrompt: "추가 프롬프트",
+  configTokenParameter: "출력 상한 API 필드",
+  configTemperature: "Temperature (0–2)",
+  configOmitTemperature: "비워 두면 temperature를 보내지 않습니다",
+  configReasoningEffort: "사고 강도",
+  configReasoningDefault: "모델 기본값",
+  configExtraPrompt: "추가 프롬프트",
+  configExtraPromptHint: "모든 AI 호출에 추가 지침을 전달합니다. 필수 JSON 출력 규칙은 유지됩니다.",
+  configRetries: "자동 재시도(0 = 끔)",
+  configRetryHint: "일시적 네트워크 오류, 시간 초과, HTTP 408/429, 5xx만 최대 5회 재시도합니다. 시도마다 요금이 부과될 수 있습니다.",
+  configTimeout: "요청당 시간 초과(초)",
+
   appName: 'Exameow',
   appSubtitle: 'AI 문제 생성기',
   navConfig: '설정',
@@ -2481,6 +2708,13 @@ export const ko: LocaleMessages = {
   genTopicPlaceholder: '예: 1장 확률론, 이진 트리...',
   genSubject: '과목',
   genSubjectPlaceholder: '이번 출제 과목 입력 (비워도 됨)',
+  genExtraPrompt: '추가 프롬프트 (선택)',
+  genExtraPromptPlaceholder: '예: 목차, 머리글/바닥글, 참고문헌, 감사의 글은 무시하고 본문 핵심만을 대상으로 출제',
+  genShortfallTitle: '일부 내용 생성에 실패했습니다',
+  genShortfallBody: '{generated}문제 생성에 성공했습니다. {skipped}문제는 재시도 후에도 실패하여 건너뛰었습니다.',
+  genRetrying: '배치 {current}/{total} 실패, 재시도 중…',
+  configMaxTokens: '응답 Max Tokens',
+  configMaxTokensHint: '비워 두면 전송하지 않습니다(서버가 결정). 출력이 길어질 때 입력을 권장합니다',
   genGenerateBtn: '문제 생성하기',
   genGenerating: '생성 중...',
   genFileSelected: '선택됨',
@@ -2888,6 +3122,38 @@ export const ko: LocaleMessages = {
 }
 
 export const es: LocaleMessages = {
+  learnModeTitle: 'Learn with AI',
+  learnModeDesc: 'Hand this question to an AI tutor — answer, get it explained, and ask follow-ups',
+  learnAskAi: 'Ask AI',
+  learnTitle: 'Learn with AI',
+  learnQuestionLabel: 'Question',
+  learnPlaceholderAnswer: 'Type your answer…',
+  learnPlaceholderAsk: 'Ask a follow-up…',
+  learnThinking: 'AI is thinking…',
+  learnStop: 'Stop',
+  learnSend: 'Send',
+  learnComposerHint: 'Enter to send · Shift+Enter for a new line',
+  practiceUnchaptered: "Sin capítulo",
+  practiceChapterImportHint: "Añade una columna Chapter al CSV/XLSX para agrupar por nombre. También se admiten archivos sin capítulos.",
+  genAutoChapter: "Capítulos automáticos con IA",
+  genAutoChapterHint: "Asigna un capítulo según el material; el tema solo limita el alcance de las preguntas.",
+  configAdvancedAI: "Configuración avanzada de IA",
+  configAdvancedAIHint: "Se aplica a la generación, respuestas, corrección y explicaciones en este dispositivo. El pensamiento usa reasoning_effort; los valores admitidos dependen del modelo. En modelos de razonamiento de OpenAI, selecciona max_completion_tokens; deja temperature vacío para omitirlo.",
+  configGroupOutput: "Límite de salida",
+  configGroupSampling: "Muestreo y razonamiento",
+  configGroupReliability: "Fiabilidad",
+  configGroupPrompt: "Prompt adicional",
+  configTokenParameter: "Campo API del límite de salida",
+  configTemperature: "Temperature (0–2)",
+  configOmitTemperature: "Déjalo vacío para omitir temperature",
+  configReasoningEffort: "Intensidad de pensamiento",
+  configReasoningDefault: "Predeterminado del modelo",
+  configExtraPrompt: "Prompt adicional",
+  configExtraPromptHint: "Instrucciones extra para todas las llamadas de IA; se mantienen las reglas de salida JSON obligatorias.",
+  configRetries: "Reintentos automáticos (0 = desactivado)",
+  configRetryHint: "Reintenta errores de red transitorios, tiempos de espera, HTTP 408/429 y 5xx, hasta 5 intentos extra. Cada intento puede generar cargos.",
+  configTimeout: "Tiempo de espera por intento (segundos)",
+
   appName: 'Exameow',
   appSubtitle: 'Generador de Exámenes IA',
   navConfig: 'Configuración',
@@ -2962,6 +3228,13 @@ export const es: LocaleMessages = {
   genTopicPlaceholder: 'Ej: Cap 1 Probabilidades...',
   genSubject: 'Asignatura',
   genSubjectPlaceholder: 'Introduce la asignatura (opcional)',
+  genExtraPrompt: 'Indicación adicional (opcional)',
+  genExtraPromptPlaceholder: 'p. ej. ignora el índice, los encabezados/pies de página, las referencias y los agradecimientos; pregunta solo sobre los puntos clave del texto',
+  genShortfallTitle: 'Parte del contenido no se pudo generar',
+  genShortfallBody: 'Se generaron {generated} preguntas; {skipped} se omitieron tras fallar los reintentos.',
+  genRetrying: 'El lote {current}/{total} falló, reintentando…',
+  configMaxTokens: 'Max Tokens de respuesta',
+  configMaxTokensHint: 'Déjalo vacío para no enviarlo (lo decide el servidor). Recomendado si la salida suele ser larga',
   genGenerateBtn: 'Generar Examen',
   genGenerating: 'Generando...',
   genFileSelected: 'Seleccionado',
@@ -3369,6 +3642,38 @@ export const es: LocaleMessages = {
 }
 
 export const fr: LocaleMessages = {
+  learnModeTitle: 'Learn with AI',
+  learnModeDesc: 'Hand this question to an AI tutor — answer, get it explained, and ask follow-ups',
+  learnAskAi: 'Ask AI',
+  learnTitle: 'Learn with AI',
+  learnQuestionLabel: 'Question',
+  learnPlaceholderAnswer: 'Type your answer…',
+  learnPlaceholderAsk: 'Ask a follow-up…',
+  learnThinking: 'AI is thinking…',
+  learnStop: 'Stop',
+  learnSend: 'Send',
+  learnComposerHint: 'Enter to send · Shift+Enter for a new line',
+  practiceUnchaptered: "Sans chapitre",
+  practiceChapterImportHint: "Ajoutez une colonne Chapter au CSV/XLSX pour regrouper par nom. Les fichiers sans chapitres restent compatibles.",
+  genAutoChapter: "Chapitres automatiques par IA",
+  genAutoChapterHint: "Attribue un chapitre selon le document ; le sujet limite uniquement la portée des questions.",
+  configAdvancedAI: "Paramètres IA avancés",
+  configAdvancedAIHint: "S'applique à la génération, aux réponses, à la correction et aux explications sur cet appareil. La réflexion utilise reasoning_effort ; les valeurs prises en charge dépendent du modèle. Pour les modèles de raisonnement OpenAI, choisissez max_completion_tokens ; laissez temperature vide pour l'omettre.",
+  configGroupOutput: "Limite de sortie",
+  configGroupSampling: "Échantillonnage et réflexion",
+  configGroupReliability: "Fiabilité",
+  configGroupPrompt: "Prompt supplémentaire",
+  configTokenParameter: "Champ API de limite de sortie",
+  configTemperature: "Temperature (0–2)",
+  configOmitTemperature: "Laisser vide pour omettre temperature",
+  configReasoningEffort: "Intensité de réflexion",
+  configReasoningDefault: "Valeur du modèle",
+  configExtraPrompt: "Prompt supplémentaire",
+  configExtraPromptHint: "Instructions supplémentaires pour tous les appels IA ; les règles de sortie JSON obligatoires restent en place.",
+  configRetries: "Nouvelles tentatives automatiques (0 = désactivé)",
+  configRetryHint: "Réessaie les erreurs réseau temporaires, les délais d'attente, HTTP 408/429 et 5xx, jusqu'à 5 tentatives supplémentaires. Chaque tentative peut être facturée.",
+  configTimeout: "Délai par tentative (secondes)",
+
   appName: 'Exameow',
   appSubtitle: 'Générateur d\\\\\\\\\\\\\\\'Examens IA',
   navConfig: 'Configuration',
@@ -3443,6 +3748,13 @@ export const fr: LocaleMessages = {
   genTopicPlaceholder: 'Ex: Chap 1 Probabilités...',
   genSubject: 'Matière',
   genSubjectPlaceholder: 'Saisissez la matière (facultatif)',
+  genExtraPrompt: 'Invite supplémentaire (facultatif)',
+  genExtraPromptPlaceholder: 'ex. ignorer la table des matières, les en-têtes/pieds de page, les références et les remerciements ; ne poser de questions que sur le contenu principal',
+  genShortfallTitle: 'Une partie du contenu n\'a pas pu être générée',
+  genShortfallBody: '{generated} questions générées ; {skipped} ignorées après échec des nouvelles tentatives.',
+  genRetrying: 'Échec du lot {current}/{total}, nouvelle tentative…',
+  configMaxTokens: 'Max Tokens de réponse',
+  configMaxTokensHint: 'Laisser vide pour ne pas envoyer (décision du serveur). Recommandé si la sortie est longue',
   genGenerateBtn: 'Générer l\\\\\\\\\\\\\\\'Examen',
   genGenerating: 'Génération en cours...',
   genFileSelected: 'Sélectionné',
@@ -3850,6 +4162,38 @@ export const fr: LocaleMessages = {
 }
 
 export const de: LocaleMessages = {
+  learnModeTitle: 'Learn with AI',
+  learnModeDesc: 'Hand this question to an AI tutor — answer, get it explained, and ask follow-ups',
+  learnAskAi: 'Ask AI',
+  learnTitle: 'Learn with AI',
+  learnQuestionLabel: 'Question',
+  learnPlaceholderAnswer: 'Type your answer…',
+  learnPlaceholderAsk: 'Ask a follow-up…',
+  learnThinking: 'AI is thinking…',
+  learnStop: 'Stop',
+  learnSend: 'Send',
+  learnComposerHint: 'Enter to send · Shift+Enter for a new line',
+  practiceUnchaptered: "Ohne Kapitel",
+  practiceChapterImportHint: "Eine Chapter-Spalte in CSV/XLSX gruppiert Fragen nach Namen. Dateien ohne Kapitel werden weiterhin unterstützt.",
+  genAutoChapter: "KI-Kapitelzuordnung",
+  genAutoChapterHint: "Ordnet Fragen anhand des Materials zu; das Thema begrenzt nur den Fragenumfang.",
+  configAdvancedAI: "Erweiterte KI-Einstellungen",
+  configAdvancedAIHint: "Gilt für Generierung, Antworten, Bewertung und Erklärungen auf diesem Gerät. Denken nutzt reasoning_effort; unterstützte Werte hängen vom Modell ab. Bei OpenAI-Reasoning-Modellen max_completion_tokens wählen; temperature leer lassen, um es nicht zu senden.",
+  configGroupOutput: "Ausgabelimit",
+  configGroupSampling: "Sampling & Denken",
+  configGroupReliability: "Zuverlässigkeit",
+  configGroupPrompt: "Zusätzlicher Prompt",
+  configTokenParameter: "API-Feld für Ausgabelimit",
+  configTemperature: "Temperature (0–2)",
+  configOmitTemperature: "Leer lassen, um temperature nicht zu senden",
+  configReasoningEffort: "Denkintensität",
+  configReasoningDefault: "Modellstandard",
+  configExtraPrompt: "Zusätzlicher Prompt",
+  configExtraPromptHint: "Zusätzliche Anweisungen für alle KI-Aufrufe; die erforderlichen JSON-Ausgaberegeln bleiben bestehen.",
+  configRetries: "Automatische Wiederholungen (0 = aus)",
+  configRetryHint: "Wiederholt nur vorübergehende Netzwerkfehler, Zeitüberschreitungen, HTTP 408/429 und 5xx, bis zu 5 zusätzliche Versuche. Jeder Versuch kann Kosten verursachen.",
+  configTimeout: "Zeitlimit pro Versuch (Sekunden)",
+
   appName: 'Exameow',
   appSubtitle: 'KI Prüfungsgenerator',
   navConfig: 'Konfiguration',
@@ -3924,6 +4268,13 @@ export const de: LocaleMessages = {
   genTopicPlaceholder: 'Z.B. Kap 1 Wahrscheinlichkeit...',
   genSubject: 'Fach',
   genSubjectPlaceholder: 'Fach eingeben (optional)',
+  genExtraPrompt: 'Zusätzlicher Prompt (optional)',
+  genExtraPromptPlaceholder: 'z. B. Inhaltsverzeichnis, Kopf-/Fußzeilen, Referenzen und Danksagungen ignorieren; nur nach den Kernpunkten des Texts fragen',
+  genShortfallTitle: 'Ein Teil des Inhalts konnte nicht generiert werden',
+  genShortfallBody: '{generated} Fragen erfolgreich generiert; {skipped} nach fehlgeschlagenen Wiederholungen übersprungen.',
+  genRetrying: 'Stapel {current}/{total} fehlgeschlagen, wird erneut versucht…',
+  configMaxTokens: 'Antwort-Max-Tokens',
+  configMaxTokensHint: 'Leer lassen, um es nicht zu senden (Server entscheidet). Empfohlen, wenn die Ausgabe lang sein kann',
   genGenerateBtn: 'Prüfung Generieren',
   genGenerating: 'Wird generiert...',
   genFileSelected: 'Ausgewählt',
@@ -4331,6 +4682,38 @@ export const de: LocaleMessages = {
 }
 
 export const ru: LocaleMessages = {
+  learnModeTitle: 'Learn with AI',
+  learnModeDesc: 'Hand this question to an AI tutor — answer, get it explained, and ask follow-ups',
+  learnAskAi: 'Ask AI',
+  learnTitle: 'Learn with AI',
+  learnQuestionLabel: 'Question',
+  learnPlaceholderAnswer: 'Type your answer…',
+  learnPlaceholderAsk: 'Ask a follow-up…',
+  learnThinking: 'AI is thinking…',
+  learnStop: 'Stop',
+  learnSend: 'Send',
+  learnComposerHint: 'Enter to send · Shift+Enter for a new line',
+  practiceUnchaptered: "Без главы",
+  practiceChapterImportHint: "Столбец Chapter в CSV/XLSX группирует вопросы по названию. Файлы без глав также поддерживаются.",
+  genAutoChapter: "Главы с помощью ИИ",
+  genAutoChapterHint: "Определяет главу по материалу; поле темы только ограничивает область вопросов.",
+  configAdvancedAI: "Расширенные настройки ИИ",
+  configAdvancedAIHint: "Применяется к генерации, ответам, проверке и пояснениям на этом устройстве. Рассуждение использует reasoning_effort; поддерживаемые значения зависят от модели. Для моделей рассуждения OpenAI выберите max_completion_tokens; оставьте temperature пустым, чтобы не отправлять.",
+  configGroupOutput: "Лимит вывода",
+  configGroupSampling: "Сэмплирование и рассуждение",
+  configGroupReliability: "Надёжность",
+  configGroupPrompt: "Дополнительный промпт",
+  configTokenParameter: "Поле API лимита вывода",
+  configTemperature: "Temperature (0–2)",
+  configOmitTemperature: "Оставьте пустым, чтобы не отправлять temperature",
+  configReasoningEffort: "Интенсивность рассуждения",
+  configReasoningDefault: "По умолчанию у модели",
+  configExtraPrompt: "Дополнительный промпт",
+  configExtraPromptHint: "Дополнительные инструкции для всех вызовов ИИ; обязательные правила вывода JSON сохраняются.",
+  configRetries: "Автоповторы (0 = выкл.)",
+  configRetryHint: "Повторяет только временные сетевые ошибки, тайм-ауты, HTTP 408/429 и 5xx, до 5 дополнительных попыток. Каждая попытка может тарифицироваться.",
+  configTimeout: "Тайм-аут на попытку (секунды)",
+
   appName: 'Exameow',
   appSubtitle: 'ИИ Генератор Тестов',
   navConfig: 'Настройки',
@@ -4405,6 +4788,13 @@ export const ru: LocaleMessages = {
   genTopicPlaceholder: 'Пример: Гл 1 Теория вероятностей...',
   genSubject: 'Предмет',
   genSubjectPlaceholder: 'Введите предмет (необязательно)',
+  genExtraPrompt: 'Дополнительный промпт (необязательно)',
+  genExtraPromptPlaceholder: 'например: игнорировать оглавление, колонтитулы, список литературы и благодарности; задавать вопросы только по ключевым пунктам текста',
+  genShortfallTitle: 'Не удалось сгенерировать часть контента',
+  genShortfallBody: 'Сгенерировано {generated} вопросов; {skipped} пропущено после неудачных повторных попыток.',
+  genRetrying: 'Пакет {current}/{total} не удался, повторяем…',
+  configMaxTokens: 'Max Tokens ответа',
+  configMaxTokensHint: 'Оставьте пустым, чтобы не передавать (решает сервер). Рекомендуется, если вывод может быть длинным',
   genGenerateBtn: 'Сгенерировать Тест',
   genGenerating: 'Генерация...',
   genFileSelected: 'Выбрано',
@@ -4812,6 +5202,38 @@ export const ru: LocaleMessages = {
 }
 
 export const ar: LocaleMessages = {
+  learnModeTitle: 'Learn with AI',
+  learnModeDesc: 'Hand this question to an AI tutor — answer, get it explained, and ask follow-ups',
+  learnAskAi: 'Ask AI',
+  learnTitle: 'Learn with AI',
+  learnQuestionLabel: 'Question',
+  learnPlaceholderAnswer: 'Type your answer…',
+  learnPlaceholderAsk: 'Ask a follow-up…',
+  learnThinking: 'AI is thinking…',
+  learnStop: 'Stop',
+  learnSend: 'Send',
+  learnComposerHint: 'Enter to send · Shift+Enter for a new line',
+  practiceUnchaptered: "بلا فصل",
+  practiceChapterImportHint: "أضف عمود Chapter إلى CSV/XLSX لتجميع الأسئلة حسب الاسم. تبقى الملفات بلا فصول مدعومة.",
+  genAutoChapter: "تصنيف الفصول بالذكاء الاصطناعي",
+  genAutoChapterHint: "يحدد فصل كل سؤال حسب المادة؛ حقل الموضوع يحدد نطاق الأسئلة فقط.",
+  configAdvancedAI: "إعدادات الذكاء الاصطناعي المتقدمة",
+  configAdvancedAIHint: "يُطبَّق على التوليد والإجابات والتصحيح والشرح على هذا الجهاز. يستخدم التفكير reasoning_effort وتعتمد القيم المدعومة على الطراز. في طرازات الاستدلال من OpenAI اختر max_completion_tokens؛ اترك temperature فارغًا لعدم إرساله.",
+  configGroupOutput: "حد الإخراج",
+  configGroupSampling: "أخذ العينات والتفكير",
+  configGroupReliability: "الموثوقية",
+  configGroupPrompt: "مطالبة إضافية",
+  configTokenParameter: "حقل API لحد الإخراج",
+  configTemperature: "Temperature (0–2)",
+  configOmitTemperature: "اتركه فارغًا لعدم إرسال temperature",
+  configReasoningEffort: "شدة التفكير",
+  configReasoningDefault: "افتراضي الطراز",
+  configExtraPrompt: "أمر إضافي",
+  configExtraPromptHint: "تعليمات إضافية لجميع استدعاءات الذكاء الاصطناعي؛ تبقى قواعد إخراج JSON مطلوبة.",
+  configRetries: "إعادة المحاولة التلقائية (0 = إيقاف)",
+  configRetryHint: "يعيد المحاولة فقط لأخطاء الشبكة المؤقتة والمهلات وHTTP 408/429 و5xx، حتى 5 محاولات إضافية. قد تُحتسب كل محاولة.",
+  configTimeout: "المهلة لكل محاولة (ثوانٍ)",
+
   appName: 'Exameow',
   appSubtitle: 'مولد أسئلة الامتحانات بالذكاء الاصطناعي',
   navConfig: 'الإعدادات',
@@ -4886,6 +5308,13 @@ export const ar: LocaleMessages = {
   genTopicPlaceholder: 'مثال: الفصل 1 نظرية الاحتمالات...',
   genSubject: 'المادة',
   genSubjectPlaceholder: 'أدخل المادة (اختياري)',
+  genExtraPrompt: 'مطالبة إضافية (اختياري)',
+  genExtraPromptPlaceholder: 'مثال: تجاهل جدول المحتويات والترويسة والتذييل والمراجع والإهداء، واكتفِ بطرح أسئلة حول النقاط الرئيسية في النص',
+  genShortfallTitle: 'فشل توليد جزء من المحتوى',
+  genShortfallBody: 'تم توليد {generated} سؤالاً؛ تم تخطي {skipped} بعد فشل إعادة المحاولة.',
+  genRetrying: 'فشلت الدفعة {current}/{total}، جارٍ إعادة المحاولة…',
+  configMaxTokens: 'الحد الأقصى لرموز الاستجابة',
+  configMaxTokensHint: 'اتركه فارغاً لعدم الإرسال (يقرره الخادم). يُنصح به إذا كان الناتج طويلاً',
   genGenerateBtn: 'توليد الامتحان',
   genGenerating: 'جاري التوليد...',
   genFileSelected: 'محدد',

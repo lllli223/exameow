@@ -1,6 +1,6 @@
 import type { Ai } from '@cloudflare/workers-types'
-import { aiChat } from './ai'
-import { JudgeResult } from './types'
+import { aiChat, aiChatOverrides } from './ai'
+import { JudgeResult, type AIRequestOptions } from './types'
 
 export interface JudgeInput {
   stem: string
@@ -11,7 +11,11 @@ export interface JudgeInput {
   model?: string
 }
 
-export async function judgeAnswer(ai: Ai, input: JudgeInput): Promise<JudgeResult> {
+export async function judgeAnswer(
+  ai: Ai,
+  input: JudgeInput,
+  options?: AIRequestOptions
+): Promise<JudgeResult> {
   const systemPrompt = buildJudgeSystemPrompt()
   const userPrompt = buildJudgeUserPrompt(
     input.stem,
@@ -20,7 +24,12 @@ export async function judgeAnswer(ai: Ai, input: JudgeInput): Promise<JudgeResul
     input.userAnswer,
     input.language
   )
-  const response = await aiChat(ai, { model: input.model, systemPrompt, userPrompt })
+  const response = await aiChat(ai, {
+    model: input.model,
+    systemPrompt,
+    userPrompt,
+    ...aiChatOverrides(options),
+  })
   return parseJudge(response)
 }
 

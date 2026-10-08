@@ -35,6 +35,7 @@ export interface Question {
 export interface PracticeFilter {
   subjects?: string[]
   chapters?: string[]
+  includeUnchaptered?: boolean
   difficulties?: Difficulty[]
   types?: QuestionType[]
 }
@@ -108,16 +109,43 @@ export interface ExamParams {
   difficulty: Difficulty
   language: string
   topic_filter?: string
+  auto_chapter?: boolean
+  chapter_names?: string[]
   text?: string
   batch_index?: number
   batch_total?: number
   source_name?: string
+  custom_prompt?: string
+  max_tokens?: number
 }
+
+export type TokenParameter = 'max_tokens' | 'max_completion_tokens'
+
+export type ReasoningEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'none'
 
 export interface AIConfig {
   endpoint: string
   api_key: string
   model: string
+  max_tokens?: number
+  token_parameter?: TokenParameter
+  temperature?: number
+  omit_temperature?: boolean
+  reasoning_effort?: ReasoningEffort
+  extra_prompt?: string
+  retries?: number
+  timeout_seconds?: number
+}
+
+export interface AIRequestOptions {
+  max_tokens?: number
+  token_parameter: TokenParameter
+  temperature?: number
+  omit_temperature: boolean
+  reasoning_effort?: ReasoningEffort
+  extra_prompt?: string
+  retries: number
+  timeout_seconds?: number
 }
 
 export interface ModelInfo {
@@ -149,6 +177,15 @@ export interface ExplainParams {
 
 export interface ExplainResult {
   explanation: string
+}
+
+export interface ChatMessage {
+  role: 'system' | 'user' | 'assistant'
+  content: string
+}
+
+export interface ChatResult {
+  reply: string
 }
 
 export interface PublicQuestion {

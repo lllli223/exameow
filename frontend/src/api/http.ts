@@ -1,4 +1,6 @@
-import type { AIConfig, AnswerResult, ExamParams, ExplainParams, ExplainResult, JudgeParams, JudgeResult, ModelInfo, Question } from '@exameow/shared'
+import type { AIConfig, AIRequestOptions, AnswerResult, ChatMessage, ExamParams, ExplainParams, ExplainResult, JudgeParams, JudgeResult, ModelInfo, Question } from '@exameow/shared'
+import { resolveAIOptions } from '@exameow/shared'
+import { consumeChatSse, type ChatStreamHandlers } from '@/utils/chatStream'
 
 const BASE_URL = import.meta.env.VITE_API_URL || ''
 
@@ -32,6 +34,7 @@ export const httpApi = {
     formData.append('endpoint', config.endpoint)
     formData.append('api_key', config.api_key)
     formData.append('model', config.model)
+    formData.append('options', JSON.stringify(resolveAIOptions(config)))
 
     const res = await fetch(`${BASE_URL}/api/generate`, {
       method: 'POST',
@@ -84,6 +87,7 @@ export const httpApi = {
         endpoint: config.endpoint,
         api_key: config.api_key,
         model: config.model,
+        options: resolveAIOptions(config),
       }),
       signal,
     })
@@ -109,6 +113,7 @@ export const httpApi = {
         endpoint: config.endpoint,
         api_key: config.api_key,
         model: config.model,
+        options: resolveAIOptions(config),
       }),
       signal,
     })
@@ -133,11 +138,48 @@ export const httpApi = {
         endpoint: config.endpoint,
         api_key: config.api_key,
         model: config.model,
+        options: resolveAIOptions(config),
       }),
       signal,
     })
     if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`)
     return res.json()
+  },
+
+  async chatStream(
+    messages: ChatMessage[],
+    config: AIConfig,
+    handlers: ChatStreamHandlers,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    let res: Response
+    try {
+      res = await fetch(`${BASE_URL}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages,
+          endpoint: config.endpoint,
+          api_key: config.api_key,
+          model: config.model,
+          options: resolveAIOptions(config),
+        }),
+        signal,
+      })
+    } catch (error) {
+      if ((error as { name?: string })?.name === 'AbortError') throw error
+      handlers.onError(error)
+      return
+    }
+    if (!res.ok) {
+      handlers.onError(new Error(`HTTP ${res.status}: ${await res.text().catch(() => '')}`))
+      return
+    }
+    if (!res.body) {
+      handlers.onError(new Error('Server returned no response body'))
+      return
+    }
+    await consumeChatSse(res.body, handlers, signal)
   },
 
   async saveConfig(config: AIConfig): Promise<void> {

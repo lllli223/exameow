@@ -1,6 +1,6 @@
 import type { Ai } from '@cloudflare/workers-types'
-import { aiChat } from './ai'
-import { ExplainResult } from './types'
+import { aiChat, aiChatOverrides } from './ai'
+import { ExplainResult, type AIRequestOptions } from './types'
 
 export interface ExplainInput {
   stem: string
@@ -10,7 +10,11 @@ export interface ExplainInput {
   model?: string
 }
 
-export async function explainQuestion(ai: Ai, input: ExplainInput): Promise<ExplainResult> {
+export async function explainQuestion(
+  ai: Ai,
+  input: ExplainInput,
+  options?: AIRequestOptions
+): Promise<ExplainResult> {
   const systemPrompt = buildExplainSystemPrompt()
   const userPrompt = buildExplainUserPrompt(
     input.stem,
@@ -18,7 +22,12 @@ export async function explainQuestion(ai: Ai, input: ExplainInput): Promise<Expl
     input.analysis,
     input.language
   )
-  const response = await aiChat(ai, { model: input.model, systemPrompt, userPrompt })
+  const response = await aiChat(ai, {
+    model: input.model,
+    systemPrompt,
+    userPrompt,
+    ...aiChatOverrides(options),
+  })
   return parseExplain(response)
 }
 

@@ -308,6 +308,7 @@ onUnmounted(() => {
       <input
         v-model="nameInput"
         class="input-outlined w-full"
+        maxlength="50"
         :placeholder="i18n.t('takeEnterName')"
         @keyup.enter="handleNameSubmit"
       />

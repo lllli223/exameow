@@ -1,16 +1,17 @@
 import { Ai } from '@cloudflare/workers-types'
-import { aiChat } from './ai'
-import { AnswerResult } from './types'
+import { aiChat, aiChatOverrides } from './ai'
+import { AnswerResult, type AIRequestOptions } from './types'
 
 export async function answerQuestion(
   ai: Ai,
   question: string,
   language: string,
-  model?: string
+  model?: string,
+  options?: AIRequestOptions
 ): Promise<AnswerResult> {
   const systemPrompt = buildAnswerSystemPrompt()
   const userPrompt = buildAnswerUserPrompt(question, language)
-  const response = await aiChat(ai, { model, systemPrompt, userPrompt })
+  const response = await aiChat(ai, { model, systemPrompt, userPrompt, ...aiChatOverrides(options) })
   return parseAnswer(response)
 }
 

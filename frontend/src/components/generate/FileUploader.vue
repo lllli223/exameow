@@ -192,7 +192,7 @@ function onDrop(e: DragEvent) {
             <CameraIcon class="w-3.5 h-3.5" />
             <span>{{ i18n.t('genTakePhoto') }}</span>
           </button>
-          <button class="btn-tonal !h-8 !text-xs !px-3" @click="pick">+ {{ i18n.t('practiceAddFile') }}</button>
+          <button class="btn-tonal !h-8 !text-xs !px-3" @click="pick">{{ i18n.t('practiceAddFile') }}</button>
         </div>
       </div>
 

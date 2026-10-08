@@ -14,11 +14,24 @@ import {
   syncing,
 } from '@/services/studySync'
 import BaseCombobox from '@/components/common/BaseCombobox.vue'
-import { ServerIcon, KeyIcon, CloudArrowDownIcon, CpuChipIcon, CheckCircleIcon, EyeIcon, EyeSlashIcon, CheckIcon, ArrowRightIcon, ArrowLeftIcon, CloudIcon, GlobeAltIcon } from '@heroicons/vue/24/outline'
+import BaseSelect from '@/components/common/BaseSelect.vue'
+import { ServerIcon, KeyIcon, CloudArrowDownIcon, CpuChipIcon, CheckCircleIcon, EyeIcon, EyeSlashIcon, CheckIcon, ArrowRightIcon, ArrowLeftIcon, CloudIcon, GlobeAltIcon, AdjustmentsHorizontalIcon, ChevronDownIcon } from '@heroicons/vue/24/outline'
 
 const configStore = useConfigStore()
 const router = useRouter()
 const i18n = useI18nStore()
+
+const advancedOpen = ref(false)
+
+const tokenParameterOptions = [
+  { value: 'max_tokens', label: 'max_tokens' },
+  { value: 'max_completion_tokens', label: 'max_completion_tokens' },
+]
+
+const reasoningEffortOptions = computed(() => [
+  { value: '', label: i18n.t('configReasoningDefault') },
+  ...['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'none'].map((e) => ({ value: e, label: e })),
+])
 
 const showKey = ref(false)
 const saveSuccess = ref(false)
@@ -302,6 +315,132 @@ async function handleSave() {
       <div v-if="syncFlushError" class="mt-3 text-sm" style="color: rgb(var(--md-error))">
         {{ syncFlushError }}
       </div>
+    </div>
+
+    <!-- Advanced AI settings -->
+    <div class="card-filled p-5 sm:p-6 mb-4 shadow-sm border border-[rgb(var(--md-outline-variant)/0.3)]">
+      <button
+        type="button"
+        class="w-full flex items-center gap-3 text-left cursor-pointer"
+        :aria-expanded="advancedOpen"
+        aria-controls="advanced-ai-panel"
+        @click="advancedOpen = !advancedOpen"
+      >
+        <AdjustmentsHorizontalIcon class="w-5 h-5 shrink-0" style="color: rgb(var(--md-on-surface-variant))" />
+        <span class="flex-1 text-label-md font-semibold" style="color: rgb(var(--md-on-surface-variant))">{{ i18n.t('configAdvancedAI') }}</span>
+        <ChevronDownIcon
+          class="w-5 h-5 shrink-0 transition-transform duration-300 ease-[cubic-bezier(0.34,1.56,0.64,1)]"
+          :class="{ 'rotate-180': advancedOpen }"
+          style="color: rgb(var(--md-on-surface-variant))"
+        />
+      </button>
+
+      <Transition name="scale">
+        <div v-if="advancedOpen" id="advanced-ai-panel">
+          <p class="text-body-sm mt-3 mb-4" style="color: rgb(var(--md-on-surface-variant))">{{ i18n.t('configAdvancedAIHint') }}</p>
+
+          <!-- 输出上限 -->
+          <p class="text-label-md font-semibold mb-3" style="color: rgb(var(--md-on-surface))">{{ i18n.t('configGroupOutput') }}</p>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <label class="text-label-md block">{{ i18n.t('configMaxTokens') }}
+              <input
+                :value="configStore.maxTokens ?? ''"
+                type="number"
+                min="1"
+                step="1"
+                class="input-outlined w-full mt-2 text-sm"
+                :placeholder="i18n.t('configMaxTokensHint')"
+                @input="(e: Event) => {
+                  const v = (e.target as HTMLInputElement).value
+                  configStore.maxTokens = v === '' ? null : Math.max(1, Math.floor(Number(v)) || 1)
+                }"
+              />
+            </label>
+            <div>
+              <label class="text-label-md block">{{ i18n.t('configTokenParameter') }}</label>
+              <BaseSelect
+                class="mt-2 [&>button]:!rounded-xl"
+                :model-value="configStore.tokenParameter"
+                :options="tokenParameterOptions"
+                @update:model-value="configStore.tokenParameter = $event"
+              />
+            </div>
+          </div>
+
+          <div class="divider my-5" />
+
+          <!-- 采样与思考 -->
+          <p class="text-label-md font-semibold mb-3" style="color: rgb(var(--md-on-surface))">{{ i18n.t('configGroupSampling') }}</p>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label class="text-label-md block">{{ i18n.t('configTemperature') }}</label>
+              <input
+                :value="configStore.temperature ?? ''"
+                type="number"
+                min="0"
+                max="2"
+                step="0.1"
+                class="input-outlined w-full mt-2 text-sm"
+                :placeholder="i18n.t('configOmitTemperature')"
+                @input="(e: Event) => {
+                  const raw = (e.target as HTMLInputElement).value
+                  if (raw === '') { configStore.temperature = null; return }
+                  const v = Number(raw)
+                  configStore.temperature = Number.isFinite(v) ? Math.min(2, Math.max(0, v)) : 0.7
+                }"
+              />
+            </div>
+            <div>
+              <label class="text-label-md block">{{ i18n.t('configReasoningEffort') }}</label>
+              <BaseSelect
+                class="mt-2 [&>button]:!rounded-xl"
+                :model-value="configStore.reasoningEffort"
+                :options="reasoningEffortOptions"
+                @update:model-value="configStore.reasoningEffort = $event"
+              />
+            </div>
+          </div>
+
+          <div class="divider my-5" />
+
+          <!-- 可靠性 -->
+          <p class="text-label-md font-semibold mb-3" style="color: rgb(var(--md-on-surface))">{{ i18n.t('configGroupReliability') }}</p>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <label class="text-label-md block">{{ i18n.t('configRetries') }}
+              <input v-model.number="configStore.retries" type="number" min="0" max="5" step="1" class="input-outlined w-full mt-2 text-sm" />
+            </label>
+            <label class="text-label-md block">{{ i18n.t('configTimeout') }}
+              <input
+                :value="configStore.timeoutSeconds ?? ''"
+                type="number"
+                min="1"
+                max="3600"
+                step="1"
+                class="input-outlined w-full mt-2 text-sm"
+                @input="(e: Event) => {
+                  const v = (e.target as HTMLInputElement).value
+                  configStore.timeoutSeconds = v === '' ? null : Math.min(3600, Math.max(1, Math.floor(Number(v)) || 1))
+                }"
+              />
+            </label>
+          </div>
+
+          <div class="divider my-5" />
+
+          <!-- 补充 Prompt -->
+          <p class="text-label-md font-semibold mb-3" style="color: rgb(var(--md-on-surface))">{{ i18n.t('configGroupPrompt') }}</p>
+          <label class="text-label-md block">{{ i18n.t('configExtraPrompt') }}
+            <textarea
+              v-model="configStore.extraPrompt"
+              maxlength="20000"
+              rows="4"
+              class="input-outlined w-full mt-2 text-sm"
+              :placeholder="i18n.t('configExtraPromptHint')"
+            />
+          </label>
+          <p class="text-body-sm mt-3" style="color: rgb(var(--md-on-surface-variant))">{{ i18n.t('configRetryHint') }}</p>
+        </div>
+      </Transition>
     </div>
 
     <Transition name="scale">

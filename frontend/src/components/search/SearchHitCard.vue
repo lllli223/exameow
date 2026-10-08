@@ -3,6 +3,7 @@ import { ref } from 'vue'
 import { useI18nStore } from '@/stores/i18n'
 import type { SearchHit } from '@/utils/questionSearch'
 import { ChevronDownIcon } from '@heroicons/vue/24/outline'
+import { trueFalseOption } from '@/utils/answerGrading'
 
 const props = defineProps<{ hit: SearchHit }>()
 const i18n = useI18nStore()
@@ -23,7 +24,8 @@ function isCorrectOption(idx: number): boolean {
     return letters.includes(String.fromCharCode(65 + idx))
   }
   if (q.type === 'true_false') {
-    return q.answer.trim().toLowerCase() === (q.options[idx] || '').trim().toLowerCase()
+    const option = trueFalseOption(q.answer)
+    return option === String.fromCharCode(65 + idx)
   }
   return false
 }
