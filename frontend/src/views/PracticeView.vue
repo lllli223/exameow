@@ -245,6 +245,7 @@ watch(
 onUnmounted(() => {
   judgeAbort?.abort()
   explainAbort?.abort()
+  if (viewState.value === 'practice') practiceStore.pauseCurrentTimer()
   if (swipeContainer.value) {
     detach(swipeContainer.value)
   }
@@ -262,6 +263,16 @@ function resumeSession() {
   practiceStore.resumeCurrentTimer()
   viewState.value = 'practice'
   autoAdvancing.value = false
+}
+
+function resumeBankSession(bankId: string) {
+  if (!practiceStore.activateBankSession(bankId)) return
+  if (practiceStore.session?.finishedAt != null) {
+    elapsedText.value = practiceStore.formatTime(practiceStore.getElapsedTime())
+    viewState.value = 'result'
+  } else {
+    resumeSession()
+  }
 }
 
 function confirmClearSession() {
@@ -680,13 +691,16 @@ function handleRetry() {
   autoAdvancing.value = false
 }
 
+function restoreAfterWrongPractice() {
+  const previousBankId = savedMainSession.value?.bankId as string | undefined
+  practiceStore.discardTransientSession()
+  if (previousBankId) practiceStore.activateBankSession(previousBankId)
+  savedMainSession.value = null
+}
+
 function handleHome() {
-  practiceStore.clearSession()
-  if (savedMainSession.value) {
-    practiceStore.session = savedMainSession.value
-    localStorage.setItem('exameow-practice-session', JSON.stringify(savedMainSession.value))
-    savedMainSession.value = null
-  }
+  if (practiceStore.session?.mode === 'wrong') restoreAfterWrongPractice()
+  else practiceStore.pauseCurrentTimer()
   selectedBankId.value = null
   selectedMode.value = null
   mockConfig.value = { typeCounts: {} }
@@ -719,19 +733,9 @@ function handleBack() {
     practiceFilter.value = {}
     return
   }
-  if (viewState.value === 'practice') {
-    if (practiceStore.session?.mode === 'wrong') {
-      practiceStore.session = null
-      if (savedMainSession.value) {
-        practiceStore.session = savedMainSession.value
-        localStorage.setItem('exameow-practice-session', JSON.stringify(savedMainSession.value))
-        savedMainSession.value = null
-      }
-    }
-    viewState.value = 'browse'
-    selectedBankId.value = null
-    selectedMode.value = null
-  } else if (viewState.value === 'result') {
+  if (viewState.value === 'practice' || viewState.value === 'result') {
+    if (practiceStore.session?.mode === 'wrong') restoreAfterWrongPractice()
+    else practiceStore.pauseCurrentTimer()
     viewState.value = 'browse'
     selectedBankId.value = null
     selectedMode.value = null
@@ -835,12 +839,20 @@ function handleBack() {
         </div>
       </div>
 
+      <div v-if="practiceStore.sessionSaveError" class="mb-3 px-4 py-3 rounded-xl text-sm" :style="{
+        backgroundColor: 'rgba(var(--md-error) / 0.12)',
+        color: 'rgb(var(--md-error))',
+      }">
+        做题进度未能写入浏览器存储，请检查设备可用空间，避免关闭页面后丢失进度。
+      </div>
       <BankListCard
         :banks="sortedBanks"
+        :sessions="practiceStore.savedSessions"
         :selected-id="selectedBankId"
         :syncing="remoteBankSyncing"
         :sync-enabled="isStudySyncConfigured()"
         @select="selectBank"
+        @resume="resumeBankSession"
         @delete="handleDelete"
         @import="showImportDialog = true"
         @sync="handleRemoteBankSync"
@@ -860,6 +872,14 @@ function handleBack() {
           <span class="text-sm font-normal opacity-75"> / {{ i18n.t('practiceQuestionUnit', { n: practiceStore.getBank(selectedBankId)!.questions.length }) }}</span>
         </div>
       </div>
+      <button
+        v-if="practiceStore.getBankSession(selectedBankId) && practiceStore.getBankSession(selectedBankId)?.finishedAt == null"
+        class="btn-tonal w-full mb-4 !h-11"
+        @click="resumeBankSession(selectedBankId)"
+      >
+        <PlayIcon class="w-4 h-4" />
+        {{ i18n.t('practiceContinuePractice') }}
+      </button>
       <div class="grid gap-4 lg:grid-cols-2 items-start">
         <ModeSelector
           v-model="selectedMode"

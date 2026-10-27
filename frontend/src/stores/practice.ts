@@ -14,9 +14,15 @@ import { usePracticeHistoryStore } from '@/stores/practiceHistory'
 import { useWrongQuestionsStore } from '@/stores/wrongQuestions'
 import { matchPracticeFilter, reconcileMockConfig } from '@/utils/practiceFilter'
 import { gradeTrueFalseAnswer } from '@/utils/answerGrading'
+import {
+  loadSavedPracticeSessions,
+  saveStoredPracticeSession,
+  removeStoredPracticeSession,
+  getActivePracticeBankId,
+  setActivePracticeBankId,
+} from '@/utils/practiceSessionStorage'
 
 const STORAGE_KEY = 'exameow-banks'
-const SESSION_KEY = 'exameow-practice-session'
 
 function loadBanks(): QuestionBank[] {
   try {
@@ -30,46 +36,6 @@ function loadBanks(): QuestionBank[] {
 function saveBanks(banks: QuestionBank[]) {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(banks))
-  } catch {}
-}
-
-function loadSession(): PracticeSession | null {
-  try {
-    const raw = localStorage.getItem(SESSION_KEY)
-    const parsed: PracticeSession | null = raw ? JSON.parse(raw) : null
-    if (parsed) {
-      let gradesRepaired = false
-      for (const item of parsed.questions) {
-        if (item.submitted && item.question.type === 'true_false' && item.isCorrect !== null) {
-          const repaired = gradeTrueFalseAnswer(item.userAnswer, item.question.answer)
-          if (repaired !== item.isCorrect) {
-            item.isCorrect = repaired
-            gradesRepaired = true
-          }
-        }
-      }
-      if (gradesRepaired) localStorage.setItem(SESSION_KEY, JSON.stringify(parsed))
-
-      if (parsed.finishedAt == null) {
-        // A restored session is only visible as a resume card initially. Do not
-        // count time until the user explicitly resumes the practice view.
-        for (const item of parsed.questions) item.viewStartedAt = undefined
-      }
-    }
-    return parsed
-  } catch {
-    return null
-  }
-}
-
-function saveSession(session: PracticeSession | null) {
-  try {
-    if (session && session.mode === 'wrong') return
-    if (session) {
-      localStorage.setItem(SESSION_KEY, JSON.stringify(session))
-    } else {
-      localStorage.removeItem(SESSION_KEY)
-    }
   } catch {}
 }
 
@@ -192,14 +158,23 @@ function remoteBankToLocal(envelope: StudyBankEnvelope): QuestionBank {
 
 export const usePracticeStore = defineStore('practice', () => {
   const banks = ref<QuestionBank[]>(loadBanks())
-  const session = ref<PracticeSession | null>(loadSession())
+  const savedSessions = ref<Record<string, PracticeSession>>(loadSavedPracticeSessions())
+  const activeBankId = getActivePracticeBankId()
+  const lastSession = activeBankId ? savedSessions.value[activeBankId] : undefined
+  const mostRecentUnfinished = Object.values(savedSessions.value)
+    .filter(s => s.finishedAt == null)
+    .sort((a, b) => b.startedAt - a.startedAt)[0]
+  const session = ref<PracticeSession | null>(
+    lastSession?.finishedAt == null ? (lastSession ?? mostRecentUnfinished ?? null) : (mostRecentUnfinished ?? null),
+  )
+  const sessionSaveError = ref(false)
   const importing = ref(false)
   const importPreview = ref<Question[] | null>(null)
   const importFileName = ref('')
   const importAnalysis = ref<ImportAnalysis | null>(null)
   const importSource = ref('csv')
 
-  const hasSession = computed(() => session.value !== null)
+  const hasSession = computed(() => session.value !== null && session.value.finishedAt == null && session.value.mode !== 'wrong')
   const currentQuestion = computed(() => {
     if (!session.value) return null
     return session.value.questions[session.value.currentIndex] ?? null
@@ -234,6 +209,44 @@ export const usePracticeStore = defineStore('practice', () => {
     return session.value.questions.filter(q => q.isCorrect !== null).length
   })
 
+  /** Persist only this bank's session, never overwriting another bank's progress. */
+  function saveSession(current: PracticeSession | null) {
+    if (!current || current.mode === 'wrong') return
+    savedSessions.value[current.bankId] = current
+    sessionSaveError.value = !saveStoredPracticeSession(current)
+    setActivePracticeBankId(current.bankId)
+  }
+
+  function getBankSession(bankId: string): PracticeSession | null {
+    return savedSessions.value[bankId] ?? null
+  }
+
+  function pauseCurrentTimer() {
+    const current = session.value
+    if (!current || current.finishedAt != null) return
+    stopItemTimer(current.questions[current.currentIndex])
+    saveSession(current)
+  }
+
+  function activateBankSession(bankId: string): boolean {
+    const saved = getBankSession(bankId)
+    if (!saved) return false
+    if (session.value !== saved) pauseCurrentTimer()
+    session.value = saved
+    setActivePracticeBankId(bankId)
+    return true
+  }
+
+  function discardTransientSession() {
+    if (session.value?.mode === 'wrong') session.value = null
+  }
+
+  function forgetSavedSession(bankId: string) {
+    delete savedSessions.value[bankId]
+    removeStoredPracticeSession(bankId)
+    if (getActivePracticeBankId() === bankId) setActivePracticeBankId(null)
+  }
+
   function addBank(bank: QuestionBank) {
     banks.value.push(bank)
     saveBanks(banks.value)
@@ -242,6 +255,8 @@ export const usePracticeStore = defineStore('practice', () => {
   function removeBank(id: string) {
     banks.value = banks.value.filter(b => b.id !== id)
     saveBanks(banks.value)
+    forgetSavedSession(id)
+    if (session.value?.bankId === id) session.value = null
   }
 
   function getBank(id: string): QuestionBank | undefined {
@@ -287,6 +302,7 @@ export const usePracticeStore = defineStore('practice', () => {
 
     if (questions.length === 0) return false
 
+    pauseCurrentTimer()
     const startedAt = Date.now()
     const reviewStore = useWrongQuestionsStore()
     const sessionQuestions: PracticeSessionItem[] = questions.map((q, i) => ({
@@ -529,8 +545,9 @@ export const usePracticeStore = defineStore('practice', () => {
   }
 
   function clearSession() {
+    const current = session.value
+    if (current && current.mode !== 'wrong') forgetSavedSession(current.bankId)
     session.value = null
-    saveSession(null)
   }
 
   function getElapsedTime(): number {
@@ -665,6 +682,12 @@ export const usePracticeStore = defineStore('practice', () => {
   return {
     banks,
     session,
+    savedSessions,
+    sessionSaveError,
+    getBankSession,
+    activateBankSession,
+    pauseCurrentTimer,
+    discardTransientSession,
     importing,
     importPreview,
     importFileName,

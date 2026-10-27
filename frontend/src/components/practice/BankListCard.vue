@@ -3,9 +3,10 @@ import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useI18nStore } from '@/stores/i18n'
 import { useWrongQuestionsStore } from '@/stores/wrongQuestions'
 import { exportBank, type BankExportFormat } from '@/composables/useBankExport'
-import type { QuestionBank } from '@exameow/shared'
+import type { QuestionBank, PracticeSession } from '@exameow/shared'
 import {
   ClockIcon,
+  PlayIcon,
   DocumentTextIcon,
   TrashIcon,
   ArrowRightIcon,
@@ -19,6 +20,7 @@ import { isAndroid } from '@/utils/platform'
 
 const props = defineProps<{
   banks: QuestionBank[]
+  sessions: Record<string, PracticeSession>
   selectedId: string | null
   syncing?: boolean
   syncEnabled?: boolean
@@ -26,6 +28,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'select', id: string): void
+  (e: 'resume', id: string): void
   (e: 'delete', id: string): void
   (e: 'import'): void
   (e: 'sync'): void
@@ -104,6 +107,23 @@ const formatDate = (ts: number): string => {
   const d = new Date(ts)
   return `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}`
 }
+
+const progressByBank = computed(() => {
+  const progress: Record<string, { answered: number; total: number; percent: number; finished: boolean }> = {}
+  for (const bank of props.banks) {
+    const session = props.sessions[bank.id]
+    if (!session?.questions.length) continue
+    const answered = session.questions.filter(q => q.submitted).length
+    const total = session.questions.length
+    progress[bank.id] = {
+      answered,
+      total,
+      percent: Math.round(answered / total * 100),
+      finished: session.finishedAt != null,
+    }
+  }
+  return progress
+})
 
 const typeCounts = (bank: QuestionBank) => {
   const counts: Record<string, number> = {}
@@ -329,6 +349,20 @@ const hasExportMessage = computed(() => templateExportSuccess.value || templateE
               {{ formatDate(bank.createdAt) }}
             </span>
           </div>
+          <template v-if="progressByBank[bank.id]">
+            <div class="flex justify-between gap-2 text-xs mt-2" :style="{ color: 'rgb(var(--md-on-surface-variant))' }">
+              <span>{{ i18n.t('practiceAnsweredCount', {
+                a: progressByBank[bank.id]!.answered, t: progressByBank[bank.id]!.total,
+              }) }}</span>
+              <span>{{ progressByBank[bank.id]!.percent }}%</span>
+            </div>
+            <div class="h-1.5 rounded-full overflow-hidden mt-1" :style="{ backgroundColor: 'rgba(var(--md-primary) / 0.12)' }">
+              <div class="h-full rounded-full" :style="{
+                backgroundColor: 'rgb(var(--md-primary))',
+                width: progressByBank[bank.id]!.percent + '%',
+              }" />
+            </div>
+          </template>
         </div>
 
         <ArrowRightIcon
@@ -397,6 +431,14 @@ const hasExportMessage = computed(() => templateExportSuccess.value || templateE
           >
             <ExclamationTriangleIcon class="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
             <span class="truncate">{{ i18n.t('practiceWrongPractice') }}</span>
+          </button>
+          <button
+            v-if="progressByBank[bank.id] && !progressByBank[bank.id]!.finished"
+            class="btn-tonal !h-8 sm:!h-9 text-xs sm:text-sm !px-3 sm:!px-4 shrink-0 max-w-full"
+            @click.stop="emit('resume', bank.id)"
+          >
+            <PlayIcon class="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
+            <span class="truncate">{{ i18n.t('practiceContinue') }}</span>
           </button>
           <button
             class="btn-filled !h-8 sm:!h-9 text-xs sm:text-sm !px-3 sm:!px-4 shrink-0 max-w-full"
