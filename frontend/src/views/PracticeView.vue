@@ -845,6 +845,43 @@ function handleBack() {
       }">
         做题进度未能写入浏览器存储，请检查设备可用空间，避免关闭页面后丢失进度。
       </div>
+      <div
+        v-if="practiceStore.cloudProgressError"
+        class="card-outlined px-4 py-3 text-sm mb-3"
+        :style="{ color: 'rgb(var(--md-error))' }"
+      >
+        云端续做进度暂时无法同步，当前设备的进度已本地保存。
+        {{ practiceStore.cloudProgressError }}
+      </div>
+      <div
+        v-if="Object.keys(practiceStore.cloudProgressConflicts).length"
+        class="card-outlined p-4 mb-4 space-y-3"
+        :style="{ borderColor: 'rgb(var(--md-error) / 0.4)' }"
+      >
+        <div class="font-semibold text-sm">存在跨设备做题进度冲突，请选择保留的版本</div>
+        <p class="text-xs" :style="{ color: 'rgb(var(--md-on-surface-variant))' }">
+          本机和云端都发生了修改，系统不会自动覆盖任何一方。被替换的进度会另存备份。
+        </p>
+        <div v-for="(remote, bankId) in practiceStore.cloudProgressConflicts" :key="bankId"
+          class="border-t pt-3 space-y-2" :style="{ borderColor: 'rgb(var(--md-outline-variant))' }">
+          <div class="text-sm font-medium">{{ practiceStore.getBank(bankId)?.name ?? bankId }}</div>
+          <div class="text-xs" :style="{ color: 'rgb(var(--md-on-surface-variant))' }">
+            云端更新：{{ remote.updatedAt ? new Date(remote.updatedAt).toLocaleString() : '未知' }}
+          </div>
+          <div class="flex flex-wrap gap-2">
+            <button class="btn-tonal !h-9 !px-3 text-xs"
+              :disabled="practiceStore.cloudProgressSyncing"
+              @click="practiceStore.resolveCloudProgress(bankId, 'cloud')">
+              使用云端进度
+            </button>
+            <button class="btn-tonal !h-9 !px-3 text-xs"
+              :disabled="practiceStore.cloudProgressSyncing"
+              @click="practiceStore.resolveCloudProgress(bankId, 'local')">
+              保留本机进度并更新云端
+            </button>
+          </div>
+        </div>
+      </div>
       <BankListCard
         :banks="sortedBanks"
         :sessions="practiceStore.savedSessions"

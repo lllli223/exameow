@@ -1,0 +1,72 @@
+name: Build Exameow VPS package (no VPS compilation)
+
+on:
+  push:
+    tags:
+      - 'deploy-vps-*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  linux-vps:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Build Linux x86_64 Rust server on GitHub runner
+        run: cargo build --release --locked -p exameow-server
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.11.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Test and build frontend
+        run: |
+          pnpm --dir frontend run test:practice-progress
+          pnpm --dir frontend run build
+
+      - name: Bundle server and static web assets
+        run: |
+          set -eu
+          mkdir -p "$RUNNER_TEMP/exameow-vps/web"
+          install -m 755 target/release/exameow-server "$RUNNER_TEMP/exameow-vps/exameow-server"
+          cp -a frontend/dist/. "$RUNNER_TEMP/exameow-vps/web/"
+          git rev-parse HEAD > "$RUNNER_TEMP/exameow-vps/REVISION"
+          tar -czf "$RUNNER_TEMP/exameow-vps-linux-x86_64.tar.gz" -C "$RUNNER_TEMP/exameow-vps" .
+          (cd "$RUNNER_TEMP" && sha256sum exameow-vps-linux-x86_64.tar.gz > exameow-vps-linux-x86_64.tar.gz.sha256)
+          tar -tzf "$RUNNER_TEMP/exameow-vps-linux-x86_64.tar.gz" | grep -E 'exameow-server|web/index.html|REVISION'
+
+      - name: Publish deploy-only pre-release without changing latest updater release
+        if: startsWith(github.ref, 'refs/tags/deploy-vps-')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: 'Exameow VPS deployment ${{ github.ref_name }}'
+          body: 'Server and frontend binaries built on GitHub Actions. No compilation is required on the VPS.'
+          prerelease: true
+          make_latest: false
+          files: |
+            ${{ runner.temp }}/exameow-vps-linux-x86_64.tar.gz
+            ${{ runner.temp }}/exameow-vps-linux-x86_64.tar.gz.sha256
+
+      - name: Upload artifacts for manual workflow dispatch
+        uses: actions/upload-artifact@v4
+        with:
+          name: exameow-vps-linux-x86_64
+          path: |
+            ${{ runner.temp }}/exameow-vps-linux-x86_64.tar.gz
+            ${{ runner.temp }}/exameow-vps-linux-x86_64.tar.gz.sha256

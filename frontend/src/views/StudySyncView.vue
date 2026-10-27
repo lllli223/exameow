@@ -39,6 +39,11 @@ const flushing = computed(() => syncing.value)
 
 async function syncBanks() {
   const result = await practiceStore.syncStudyBanks()
+  await practiceStore.flushPracticeProgress()
+  if (practiceStore.cloudProgressError) throw new Error(practiceStore.cloudProgressError)
+  if (Object.keys(practiceStore.cloudProgressConflicts).length) {
+    throw new Error('不同设备的进度存在冲突，请在题库页面选择保留的版本。')
+  }
   return result.added + result.updated
 }
 
@@ -110,6 +115,9 @@ async function handleFlush() {
         <h1 class="text-display-sm font-bold tracking-tight">{{ i18n.t('syncTitle') }}</h1>
         <p class="text-body-sm mt-1" style="color: rgb(var(--md-on-surface-variant))">
           {{ i18n.t('syncDesc') }}
+        </p>
+        <p class="text-xs mt-1" style="color: rgb(var(--md-on-surface-variant))">
+          跨设备续做需要在各设备配置相同的服务器地址和学习同步密钥。进度包含题目位置、答案和标记；离线时先保存在本机。
         </p>
       </div>
     </div>

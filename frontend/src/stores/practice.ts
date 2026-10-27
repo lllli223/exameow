@@ -14,6 +14,7 @@ import { usePracticeHistoryStore } from '@/stores/practiceHistory'
 import { useWrongQuestionsStore } from '@/stores/wrongQuestions'
 import { matchPracticeFilter, reconcileMockConfig } from '@/utils/practiceFilter'
 import { gradeTrueFalseAnswer } from '@/utils/answerGrading'
+import { createPracticeProgressCoordinator } from '@/services/practiceProgressCoordinator'
 import {
   loadSavedPracticeSessions,
   saveStoredPracticeSession,
@@ -168,6 +169,11 @@ export const usePracticeStore = defineStore('practice', () => {
     lastSession?.finishedAt == null ? (lastSession ?? mostRecentUnfinished ?? null) : (mostRecentUnfinished ?? null),
   )
   const sessionSaveError = ref(false)
+  const progressSync = createPracticeProgressCoordinator({
+    getBanks: () => banks.value,
+    getSession: bankId => savedSessions.value[bankId] ?? null,
+    applyRemote: (bankId, remote) => applyRemoteProgress(bankId, remote),
+  })
   const importing = ref(false)
   const importPreview = ref<Question[] | null>(null)
   const importFileName = ref('')
@@ -215,6 +221,7 @@ export const usePracticeStore = defineStore('practice', () => {
     savedSessions.value[current.bankId] = current
     sessionSaveError.value = !saveStoredPracticeSession(current)
     setActivePracticeBankId(current.bankId)
+    progressSync.localChanged(current.bankId)
   }
 
   function getBankSession(bankId: string): PracticeSession | null {
@@ -245,6 +252,31 @@ export const usePracticeStore = defineStore('practice', () => {
     delete savedSessions.value[bankId]
     removeStoredPracticeSession(bankId)
     if (getActivePracticeBankId() === bankId) setActivePracticeBankId(null)
+  }
+
+  function applyRemoteProgress(bankId: string, remote: PracticeSession | null): boolean {
+    const bank = getBank(bankId)
+    if (!bank) return false
+    if (!remote) {
+      forgetSavedSession(bankId)
+      if (session.value?.bankId === bankId && session.value.mode !== 'wrong') session.value = null
+      return true
+    }
+    // The stable remote key may have a different device-local bank ID.
+    const normalized: PracticeSession = {
+      ...remote,
+      bankId,
+      bankKey: bank.remoteKey ?? bank.id,
+      questions: remote.questions.map(item => ({ ...item, viewStartedAt: undefined })),
+    }
+    if (!saveStoredPracticeSession(normalized)) {
+      sessionSaveError.value = true
+      return false
+    }
+    savedSessions.value[bankId] = normalized
+    if (session.value?.bankId === bankId && session.value.mode !== 'wrong') session.value = normalized
+    sessionSaveError.value = false
+    return true
   }
 
   function addBank(bank: QuestionBank) {
@@ -546,7 +578,10 @@ export const usePracticeStore = defineStore('practice', () => {
 
   function clearSession() {
     const current = session.value
-    if (current && current.mode !== 'wrong') forgetSavedSession(current.bankId)
+    if (current && current.mode !== 'wrong') {
+      forgetSavedSession(current.bankId)
+      progressSync.localDeleted(current.bankId)
+    }
     session.value = null
   }
 
@@ -676,6 +711,7 @@ export const usePracticeStore = defineStore('practice', () => {
       banks.value = merged
       saveBanks(banks.value)
     }
+    await progressSync.sync()
     return { total: summaries.length, added, updated, unchanged }
   }
 
@@ -684,6 +720,12 @@ export const usePracticeStore = defineStore('practice', () => {
     session,
     savedSessions,
     sessionSaveError,
+    cloudProgressConflicts: progressSync.conflicts,
+    cloudProgressSyncing: progressSync.syncing,
+    cloudProgressError: progressSync.error,
+    syncPracticeProgress: progressSync.sync,
+    flushPracticeProgress: progressSync.flush,
+    resolveCloudProgress: progressSync.resolve,
     getBankSession,
     activateBankSession,
     pauseCurrentTimer,

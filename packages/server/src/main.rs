@@ -1,6 +1,7 @@
 mod relay;
 mod routes;
 mod study;
+mod progress;
 
 use axum::{
     routing::{delete, get, post},
@@ -26,6 +27,7 @@ async fn main() {
             .lock()
             .unwrap_or_else(|e| panic!("relay db lock failed: {e}"));
         study::init_tables(&conn).unwrap_or_else(|e| panic!("failed to init study tables: {e}"));
+        progress::init_tables(&conn).unwrap_or_else(|e| panic!("failed to init progress tables: {e}"));
     }
     let admin_token = relay::load_admin_token();
     if admin_token == "pass" {

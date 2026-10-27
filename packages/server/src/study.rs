@@ -313,6 +313,10 @@ pub fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
         .route("/sessions/finish", post(sessions_finish_handler))
         .route("/sessions/{session_key}/finish", post(sessions_finish_path_handler))
         .route("/sessions/latest", get(sessions_latest_handler))
+        .route("/progress", get(crate::progress::list_handler))
+        .route("/progress/{bank_key}", get(crate::progress::get_handler)
+            .put(crate::progress::put_handler)
+            .delete(crate::progress::delete_handler))
         .route("/feed", get(feed_handler))
         .route("/feed/ack", post(feed_ack_handler))
         .route(
