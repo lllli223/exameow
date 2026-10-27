@@ -97,13 +97,19 @@ export function snapshotForCloud(session: PracticeSession): PracticeSession {
   }
 }
 
-export function backupPracticeProgress(bankId: string, source: string, session: PracticeSession) {
+export function backupPracticeProgress(bankId: string, source: string, session: PracticeSession): boolean {
   const key = BACKUP_PREFIX + encodeURIComponent(bankId)
   // Keep one recoverable local copy of the discarded branch. Server also
   // retains 20 historic revisions for conflict resolution/recovery.
-  setStorage(key, JSON.stringify({
-    backedUpAt: Date.now(), source, session: snapshotForCloud(session),
-  }))
+  try {
+    localStorage.setItem(key, JSON.stringify({
+      backedUpAt: Date.now(), source, session: snapshotForCloud(session),
+    }))
+    return true
+  } catch (error) {
+    console.warn('[practice-progress] Could not save backup:', error)
+    return false
+  }
 }
 
 async function request<T>(

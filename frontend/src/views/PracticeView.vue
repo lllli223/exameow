@@ -839,6 +839,40 @@ function handleBack() {
         </div>
       </div>
 
+      <div v-if="practiceStore.bankSaveError" class="mb-3 px-4 py-3 rounded-xl text-sm"
+        :style="{ backgroundColor: 'rgba(var(--md-error) / 0.12)', color: 'rgb(var(--md-error))' }">
+        题库无法写入本机存储，请检查剩余空间，不要清理浏览器数据。
+      </div>
+      <div v-if="practiceStore.personalBankError" class="mb-3 px-4 py-3 rounded-xl text-sm"
+        :style="{ backgroundColor: 'rgba(var(--md-error) / 0.12)', color: 'rgb(var(--md-error))' }">
+        自定义题库云同步暂时失败，题库仍保留在本机。{{ practiceStore.personalBankError }}
+      </div>
+      <div
+        v-if="Object.keys(practiceStore.personalBankConflicts).length"
+        class="card-outlined p-4 mb-4 space-y-3"
+        :style="{ borderColor: 'rgb(var(--md-error) / 0.4)' }"
+      >
+        <div class="font-semibold text-sm">自定义题库跨设备冲突</div>
+        <p class="text-xs" :style="{ color: 'rgb(var(--md-on-surface-variant))' }">
+          两台设备对同一题库进行了修改或删除，请选择保留哪一份；被覆盖的内容会先备份。
+        </p>
+        <div v-for="(remote, bankId) in practiceStore.personalBankConflicts" :key="bankId"
+          class="border-t pt-3 space-y-2" :style="{ borderColor: 'rgb(var(--md-outline-variant))' }">
+          <div class="font-medium text-sm">{{ practiceStore.getBank(bankId)?.name ?? remote.name ?? bankId }}</div>
+          <div class="text-xs" :style="{ color: 'rgb(var(--md-on-surface-variant))' }">
+            云端：{{ remote.deleted ? '已删除' : '已有题库' }} ·
+            {{ remote.updatedAt ? new Date(remote.updatedAt).toLocaleString() : '未知时间' }}
+          </div>
+          <div class="flex flex-wrap gap-2">
+            <button class="btn-tonal !h-9 !px-3 text-xs"
+              :disabled="practiceStore.personalBankSyncing"
+              @click="practiceStore.resolvePersonalBank(bankId, 'cloud')">采用云端题库</button>
+            <button class="btn-tonal !h-9 !px-3 text-xs"
+              :disabled="practiceStore.personalBankSyncing"
+              @click="practiceStore.resolvePersonalBank(bankId, 'local')">保留本机题库并更新云端</button>
+          </div>
+        </div>
+      </div>
       <div v-if="practiceStore.sessionSaveError" class="mb-3 px-4 py-3 rounded-xl text-sm" :style="{
         backgroundColor: 'rgba(var(--md-error) / 0.12)',
         color: 'rgb(var(--md-error))',

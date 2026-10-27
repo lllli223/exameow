@@ -4,6 +4,7 @@ import type { QuestionBank, PracticeSession, PracticeSessionItem, PracticeMode, 
 import {
   recordStudyAttempt,
   recordStudySessionFinish,
+  isStudySyncConfigured,
   listRemoteStudyBanks,
   getRemoteStudyBank,
   type StudyBankEnvelope,
@@ -15,6 +16,9 @@ import { useWrongQuestionsStore } from '@/stores/wrongQuestions'
 import { matchPracticeFilter, reconcileMockConfig } from '@/utils/practiceFilter'
 import { gradeTrueFalseAnswer } from '@/utils/answerGrading'
 import { createPracticeProgressCoordinator } from '@/services/practiceProgressCoordinator'
+import { createPersonalBankCoordinator } from '@/services/personalBankCoordinator'
+import { isPersonalBank } from '@/services/personalBankSync'
+import { backupPracticeProgress, fingerprintSession, loadCloudProgressMeta } from '@/services/practiceProgressSync'
 import {
   loadSavedPracticeSessions,
   saveStoredPracticeSession,
@@ -34,10 +38,14 @@ function loadBanks(): QuestionBank[] {
   }
 }
 
-function saveBanks(banks: QuestionBank[]) {
+function saveBanks(banks: QuestionBank[]): boolean {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(banks))
-  } catch {}
+    return true
+  } catch (error) {
+    console.warn('[practice] Could not persist question banks:', error)
+    return false
+  }
 }
 
 function generateId(): string {
@@ -169,10 +177,16 @@ export const usePracticeStore = defineStore('practice', () => {
     lastSession?.finishedAt == null ? (lastSession ?? mostRecentUnfinished ?? null) : (mostRecentUnfinished ?? null),
   )
   const sessionSaveError = ref(false)
+  const bankSaveError = ref(false)
   const progressSync = createPracticeProgressCoordinator({
     getBanks: () => banks.value,
     getSession: bankId => savedSessions.value[bankId] ?? null,
     applyRemote: (bankId, remote) => applyRemoteProgress(bankId, remote),
+  })
+  const personalBankSync = createPersonalBankCoordinator({
+    list: () => banks.value,
+    get: bankId => banks.value.find(bank => bank.id === bankId),
+    apply: (bankId, remote, explicit) => applyPersonalBank(bankId, remote, explicit),
   })
   const importing = ref(false)
   const importPreview = ref<Question[] | null>(null)
@@ -279,14 +293,67 @@ export const usePracticeStore = defineStore('practice', () => {
     return true
   }
 
-  function addBank(bank: QuestionBank) {
-    banks.value.push(bank)
-    saveBanks(banks.value)
+  function applyPersonalBank(bankId: string, remote: QuestionBank | null, explicit = false): boolean {
+    const existing = getBank(bankId)
+    if (existing && !isPersonalBank(existing)) return false
+    if (remote && (!isPersonalBank(remote) || remote.id !== bankId)) return false
+    const previousSession = savedSessions.value[bankId]
+    if (!remote && !explicit && session.value?.bankId === bankId
+        && session.value.mode !== 'wrong' && session.value.finishedAt == null) {
+      // Do not kick someone out of an active practice because another device
+      // deleted the bank while this page was open.
+      return false
+    }
+    if (!remote && previousSession && !explicit) {
+      // A device with unsynced practice data must not lose its bank because
+      // another device removed it. Show a conflict and require a choice.
+      const acknowledged = loadCloudProgressMeta()[bankId]?.fingerprint
+      if (!acknowledged || fingerprintSession(previousSession) !== acknowledged) return false
+    }
+    const next = banks.value.filter(bank => bank.id !== bankId)
+    if (remote) next.push(remote)
+    // Do not erase the only local in-progress session if backup storage fails.
+    const priorSession = !remote ? savedSessions.value[bankId] : undefined
+    if (priorSession && !backupPracticeProgress(bankId, 'before-cloud-bank-deletion', priorSession)) {
+      bankSaveError.value = true
+      return false
+    }
+    if (!saveBanks(next)) {
+      bankSaveError.value = true
+      return false
+    }
+    if (!remote) {
+      forgetSavedSession(bankId)
+      if (session.value?.bankId === bankId && session.value.mode !== 'wrong') session.value = null
+    }
+    banks.value = next
+    bankSaveError.value = false
+    return true
+  }
+
+  function addBank(bank: QuestionBank): boolean {
+    const next = [...banks.value, bank]
+    if (!saveBanks(next)) {
+      bankSaveError.value = true
+      return false
+    }
+    banks.value = next
+    bankSaveError.value = false
+    if (isPersonalBank(bank)) personalBankSync.localChanged(bank.id)
+    return true
   }
 
   function removeBank(id: string) {
-    banks.value = banks.value.filter(b => b.id !== id)
-    saveBanks(banks.value)
+    const existing = getBank(id)
+    if (!existing) return
+    const next = banks.value.filter(bank => bank.id !== id)
+    if (!saveBanks(next)) {
+      bankSaveError.value = true
+      return
+    }
+    banks.value = next
+    bankSaveError.value = false
+    if (isPersonalBank(existing)) personalBankSync.localDeleted(id)
     forgetSavedSession(id)
     if (session.value?.bankId === id) session.value = null
   }
@@ -657,11 +724,19 @@ export const usePracticeStore = defineStore('practice', () => {
       createdAt: Date.now(),
       source,
     }
-    addBank(bank)
+    // Avoid repeated imports of the same file within this device, including
+    // copies already downloaded from another device.
+    const duplicate = banks.value.find(existing =>
+      existing.name === bank.name
+      && existing.questions.length === bank.questions.length
+      && JSON.stringify(existing.questions) === JSON.stringify(bank.questions),
+    )
+    const id = duplicate?.id ?? (addBank(bank) ? bank.id : '')
+    if (!id) return ''
     importPreview.value = null
     importFileName.value = ''
     importAnalysis.value = null
-    return bank.id
+    return id
   }
 
   function cancelImport() {
@@ -670,7 +745,17 @@ export const usePracticeStore = defineStore('practice', () => {
     importAnalysis.value = null
   }
 
+  let studyBankSyncInFlight: Promise<StudyBankSyncResult> | null = null
+
   async function syncStudyBanks(): Promise<StudyBankSyncResult> {
+    if (studyBankSyncInFlight) return studyBankSyncInFlight
+    const task = syncAllStudyBanks()
+    studyBankSyncInFlight = task
+    try { return await task }
+    finally { if (studyBankSyncInFlight === task) studyBankSyncInFlight = null }
+  }
+
+  async function syncAllStudyBanks(): Promise<StudyBankSyncResult> {
     const summaries = await listRemoteStudyBanks()
     const snapshot = [...banks.value]
     const downloaded: QuestionBank[] = []
@@ -708,11 +793,30 @@ export const usePracticeStore = defineStore('practice', () => {
         if (index >= 0) merged[index] = localBank
         else merged.push(localBank)
       }
+      if (!saveBanks(merged)) {
+        bankSaveError.value = true
+        throw new Error('题库下载完成，但本地存储空间不足，无法安全保存。')
+      }
       banks.value = merged
-      saveBanks(banks.value)
+      bankSaveError.value = false
     }
+    // Personal banks must be available before the full practice sessions are restored.
+    await personalBankSync.sync()
     await progressSync.sync()
     return { total: summaries.length, added, updated, unchanged }
+  }
+
+  // One ordered reconnect handler: first download personal-bank content, then
+  // restore its progress. Separate concurrent focus listeners could miss a
+  // newly created bank on the first reconnect.
+  if (typeof window !== 'undefined') {
+    const reconnect = () => {
+      if (isStudySyncConfigured()) void syncStudyBanks().catch(error => {
+        console.warn('[practice] Automatic bank/progress sync failed:', error)
+      })
+    }
+    window.addEventListener('online', reconnect)
+    window.addEventListener('focus', reconnect)
   }
 
   return {
@@ -720,6 +824,13 @@ export const usePracticeStore = defineStore('practice', () => {
     session,
     savedSessions,
     sessionSaveError,
+    bankSaveError,
+    personalBankConflicts: personalBankSync.conflicts,
+    personalBankError: personalBankSync.error,
+    personalBankSyncing: personalBankSync.syncing,
+    syncPersonalBanks: personalBankSync.sync,
+    flushPersonalBanks: personalBankSync.flush,
+    resolvePersonalBank: personalBankSync.resolve,
     cloudProgressConflicts: progressSync.conflicts,
     cloudProgressSyncing: progressSync.syncing,
     cloudProgressError: progressSync.error,

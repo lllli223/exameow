@@ -21,6 +21,9 @@ jobs:
         with:
           cache-on-failure: true
 
+      - name: Verify Rust study server tests
+        run: cargo test --locked -p exameow-server
+
       - name: Build Linux x86_64 Rust server on GitHub runner
         run: cargo build --release --locked -p exameow-server
 
@@ -38,6 +41,7 @@ jobs:
       - name: Test and build frontend
         run: |
           pnpm --dir frontend run test:practice-progress
+          pnpm --dir frontend run test:review
           pnpm --dir frontend run build
 
       - name: Bundle server and static web assets

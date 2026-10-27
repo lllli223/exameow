@@ -39,7 +39,12 @@ const flushing = computed(() => syncing.value)
 
 async function syncBanks() {
   const result = await practiceStore.syncStudyBanks()
+  await practiceStore.flushPersonalBanks()
   await practiceStore.flushPracticeProgress()
+  if (practiceStore.personalBankError) throw new Error(practiceStore.personalBankError)
+  if (Object.keys(practiceStore.personalBankConflicts).length) {
+    throw new Error('自定义题库内容存在冲突，请前往题库页面选择保留的版本。')
+  }
   if (practiceStore.cloudProgressError) throw new Error(practiceStore.cloudProgressError)
   if (Object.keys(practiceStore.cloudProgressConflicts).length) {
     throw new Error('不同设备的进度存在冲突，请在题库页面选择保留的版本。')
@@ -57,8 +62,8 @@ async function handleSave() {
     const bankCount = await syncBanks()
     void flushAttempts()
     success.value = bankCount > 0
-      ? i18n.t('syncFlushed', { n: bankCount })
-      : i18n.t('configSaved')
+      ? `题库与做题进度已同步（共享题库更新 ${bankCount} 项）`
+      : '共享题库、自定义题库与做题进度同步完成'
   } catch (e: any) {
     error.value = e?.message ?? String(e)
   } finally {
@@ -79,8 +84,8 @@ async function handleTest() {
     saveStudySyncConfig({ baseUrl: baseUrl.value, token: token.value })
     const bankCount = await syncBanks()
     success.value = bankCount > 0
-      ? `${i18n.t('syncTestOk')} · ${i18n.t('syncFlushed', { n: bankCount })}`
-      : i18n.t('syncTestOk')
+      ? `${i18n.t('syncTestOk')} · 题库与进度已同步（${bankCount} 项共享题库更新）`
+      : `${i18n.t('syncTestOk')} · 自定义题库与进度同步完成`
   } catch (e: any) {
     error.value = e?.message ?? String(e)
   } finally {
@@ -117,7 +122,7 @@ async function handleFlush() {
           {{ i18n.t('syncDesc') }}
         </p>
         <p class="text-xs mt-1" style="color: rgb(var(--md-on-surface-variant))">
-          跨设备续做需要在各设备配置相同的服务器地址和学习同步密钥。进度包含题目位置、答案和标记；离线时先保存在本机。
+          各设备使用同一服务器地址和同步密钥后，自定义题库、题目内容及做题进度均可同步。离线时先保存在本机；有冲突时在题库页面选择保留版本。
         </p>
       </div>
     </div>

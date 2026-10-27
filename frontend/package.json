@@ -12,7 +12,7 @@
     "build-only": "vite build",
     "type-check": "vue-tsc --build",
     "test:review": "node --test scripts/test-review-entries.mts && node scripts/test-marked-retry.mjs",
-    "test:practice-progress": "node --test scripts/test-practice-sessions.mjs scripts/test-practice-store.mjs scripts/test-practice-cloud-sync.mjs",
+    "test:practice-progress": "node --test scripts/test-practice-sessions.mjs scripts/test-practice-store.mjs scripts/test-practice-cloud-sync.mjs scripts/test-personal-bank-sync.mjs",
     "tauri": "tauri"
   },
   "dependencies": {

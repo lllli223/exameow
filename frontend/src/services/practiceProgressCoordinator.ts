@@ -262,11 +262,6 @@ export function createPracticeProgressCoordinator(callbacks: Callbacks) {
     }
   }
 
-  if (typeof window !== 'undefined') {
-    window.addEventListener('online', () => { void sync() })
-    window.addEventListener('focus', () => { if (ready) void sync() })
-  }
-
   async function flush() {
     const pendingIds = [...timers.keys()]
     for (const bankId of pendingIds) {
